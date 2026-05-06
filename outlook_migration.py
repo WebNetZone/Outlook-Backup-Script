@@ -1,5 +1,5 @@
 """
-Outlook Migration Tool v2.0.0
+Outlook Migration Tool v3.0.0
 ==============================
 Vollautomatische Outlook Sicherung & Migration.
 Läuft auf altem UND neuem PC – erkennt automatisch den Modus.
@@ -32,7 +32,7 @@ from tkinter.scrolledtext import ScrolledText
 # ═══════════════════════════════════════════════════════════════
 
 APP_TITLE   = "Outlook Migration Tool"
-APP_VERSION = "2.0.0"
+APP_VERSION = "3.0.0"
 CONFIG_FILE = "outlook_migration_config.json"
 PROGRESS_FILE = os.path.join(os.environ.get("TEMP", "C:\\Temp"), "outlook_migration_progress.json")
 SHARE_NAME  = "OutlookMigration"
@@ -1039,19 +1039,25 @@ class MigrationApp:
     # ── ERKENNUNG ─────────────────────────────────────────────
 
     def _auto_detect(self):
-        self.lbl_detect_status.config(text="🔍 Suche USB-Stick mit Konfig...")
+        self.lbl_detect_status.config(text="🔍 Suche USB-Stick...")
 
         def detect():
             config_path, config, usb = find_config_on_usb()
 
             if config:
-                # Konfig gefunden → Neuer PC Modus ODER löschen
+                # Konfig gefunden → Neuer PC Import Modus
                 self.usb_config = config
                 self.config_path = config_path
                 self.root.after(0, lambda: self._found_config(config, usb))
             else:
-                # Keine Konfig → Alter PC Modus
-                self.root.after(0, lambda: self._no_config_found())
+                # Kein Konfig → Hardware_Info.txt prüfen
+                hw_path, usb = find_hardware_info_on_usb()
+                if hw_path:
+                    # Hardware bereits gescannt → Alter PC Modus
+                    self.root.after(0, lambda: self._hardware_already_scanned(hw_path, usb))
+                else:
+                    # Nichts gefunden → Abfrage Hardware scannen?
+                    self.root.after(0, lambda: self._ask_hardware_scan())
 
         threading.Thread(target=detect, daemon=True).start()
 
@@ -1081,6 +1087,138 @@ class MigrationApp:
     def _no_config_found(self):
         self.lbl_detect_status.config(text="ℹ️ Kein Konfig gefunden → Alter PC Modus", fg=ACCENT_CYAN)
         self._set_mode("old_pc")
+
+    def _ask_hardware_scan(self):
+        """Abfrage: Hardware scannen oder direkt Outlook Backup?"""
+        self.lbl_detect_status.config(text="🔍 Kein Konfig & kein Hardware-Scan gefunden.", fg=ACCENT_WARN)
+
+        for w in self.detect_info.winfo_children():
+            w.destroy()
+
+        Label(self.detect_info, text="Was möchtest du tun?",
+              font=("Segoe UI", 11, "bold"), bg=BG_CARD, fg=TEXT_WHITE).pack(anchor=W, pady=(5, 10))
+
+        bf = Frame(self.detect_info, bg=BG_CARD)
+        bf.pack(anchor=W)
+        self._btn(bf, "🖥️ Hardware scannen",
+                  self._run_hardware_scan, color=ACCENT_PURPLE, width=20).pack(side=LEFT, padx=(0, 10))
+        self._btn(bf, "📦 Outlook Backup starten",
+                  lambda: self._set_mode("old_pc"), color=ACCENT_BLUE, width=22).pack(side=LEFT)
+
+    def _hardware_already_scanned(self, hw_path, usb):
+        """Hardware bereits gescannt – direkt Alter PC Modus + Option erneut scannen."""
+        self.lbl_detect_status.config(text="✅ Hardware bereits gescannt!", fg=ACCENT_GREEN)
+        self.usb_root.set(usb)
+
+        for w in self.detect_info.winfo_children():
+            w.destroy()
+
+        Label(self.detect_info, text=f"Hardware_Info.txt gefunden:",
+              font=("Segoe UI", 10), bg=BG_CARD, fg=TEXT_GRAY).pack(anchor=W)
+        Label(self.detect_info, text=hw_path,
+              font=("Segoe UI", 9), bg=BG_CARD, fg=TEXT_WHITE).pack(anchor=W, pady=(0, 8))
+
+        bf = Frame(self.detect_info, bg=BG_CARD)
+        bf.pack(anchor=W)
+        self._btn(bf, "📦 Outlook Backup starten",
+                  lambda: self._set_mode("old_pc"), color=ACCENT_GREEN, width=22).pack(side=LEFT, padx=(0, 10))
+        self._btn(bf, "🔄 Erneut scannen",
+                  self._run_hardware_scan, color=ACCENT_WARN, width=16).pack(side=LEFT)
+
+    def _run_hardware_scan(self):
+        """Hardware Scan durchführen und speichern."""
+        self.lbl_detect_status.config(text="🔍 Scanne Hardware...", fg=ACCENT_CYAN)
+
+        for w in self.detect_info.winfo_children():
+            w.destroy()
+
+        self.scan_log = Label(self.detect_info, text="Bitte warten...",
+                               font=("Segoe UI", 10), bg=BG_CARD, fg=TEXT_GRAY, justify=LEFT)
+        self.scan_log.pack(anchor=W, pady=5)
+
+        self.scan_progress = ttk.Progressbar(self.detect_info, mode="indeterminate",
+                                              style="Custom.Horizontal.TProgressbar")
+        self.scan_progress.pack(fill=X, pady=5)
+        self.scan_progress.start(10)
+
+        def do_scan():
+            # Hardware auslesen
+            hardware, errors = scan_hardware()
+
+            # Speicherort bestimmen
+            usbs = find_usb_sticks()
+            if usbs:
+                save_dir = os.path.join(usbs[0], "Treiber")
+                self.usb_root.set(usbs[0])
+            else:
+                # Kein USB-Stick → alternativen Speicherort vorschlagen
+                self.root.after(0, lambda: self._ask_alt_save_location(hardware, errors))
+                return
+
+            save_path = os.path.join(save_dir, HARDWARE_INFO_FILE)
+
+            try:
+                saved = save_hardware_info(hardware, errors, save_path)
+                self.root.after(0, lambda: self._scan_done(hardware, errors, saved))
+            except Exception as e:
+                self.root.after(0, lambda: self._ask_alt_save_location(hardware, errors))
+
+        threading.Thread(target=do_scan, daemon=True).start()
+
+    def _ask_alt_save_location(self, hardware, errors):
+        """Alternativen Speicherort vorschlagen wenn USB nicht beschreibbar."""
+        self.scan_progress.stop()
+        path = filedialog.askdirectory(title="Speicherort für Hardware_Info.txt wählen")
+        if path:
+            save_path = os.path.join(path, "Treiber", HARDWARE_INFO_FILE)
+            try:
+                saved = save_hardware_info(hardware, errors, save_path)
+                self._scan_done(hardware, errors, saved)
+            except Exception as e:
+                messagebox.showerror("Fehler", "Konnte nicht speichern:\n" + str(e))
+        else:
+            self.lbl_detect_status.config(text="⚠️ Scan abgebrochen.", fg=ACCENT_WARN)
+
+    def _scan_done(self, hardware, errors, saved_path):
+        """Hardware Scan abgeschlossen."""
+        self.scan_progress.stop()
+        self.scan_progress.pack_forget()
+
+        self.lbl_detect_status.config(text="✅ Hardware Scan abgeschlossen!", fg=ACCENT_GREEN)
+
+        for w in self.detect_info.winfo_children():
+            w.destroy()
+
+        # Gefundene Komponenten anzeigen
+        Label(self.detect_info, text="Gefundene Hardware:",
+              font=("Segoe UI", 10, "bold"), bg=BG_CARD, fg=TEXT_WHITE).pack(anchor=W, pady=(0, 5))
+
+        for component, value in hardware.items():
+            row = Frame(self.detect_info, bg=BG_CARD)
+            row.pack(fill=X, pady=1)
+            Label(row, text=f"{component}:", width=16, anchor=W,
+                  font=("Segoe UI", 9), bg=BG_CARD, fg=TEXT_GRAY).pack(side=LEFT)
+            Label(row, text=value, font=("Segoe UI", 9, "bold"),
+                  bg=BG_CARD, fg=TEXT_WHITE).pack(side=LEFT)
+
+        if errors:
+            Label(self.detect_info,
+                  text=f"⚠️ {len(errors)} Komponente(n) nicht auslesbar – trotzdem gespeichert.",
+                  font=("Segoe UI", 9), bg=BG_CARD, fg=ACCENT_WARN).pack(anchor=W, pady=4)
+
+        Label(self.detect_info, text=f"💾 Gespeichert: {saved_path}",
+              font=("Segoe UI", 9), bg=BG_CARD, fg=TEXT_GRAY).pack(anchor=W, pady=(4, 8))
+
+        Label(self.detect_info,
+              text="Nächster Schritt: Stick zum alten PC und Outlook Backup starten.",
+              font=("Segoe UI", 10, "bold"), bg=BG_CARD, fg=ACCENT_GREEN).pack(anchor=W)
+
+        bf = Frame(self.detect_info, bg=BG_CARD)
+        bf.pack(anchor=W, pady=8)
+        self._btn(bf, "📂 Ordner öffnen",
+                  lambda: os.startfile(os.path.dirname(saved_path)), width=16).pack(side=LEFT, padx=(0, 10))
+        self._btn(bf, "📦 Outlook Backup starten",
+                  lambda: self._set_mode("old_pc"), color=ACCENT_GREEN, width=22).pack(side=LEFT)
 
     def _set_mode(self, mode):
         self.mode = mode
@@ -1838,3 +1976,183 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ═══════════════════════════════════════════════════════════════
+# HARDWARE SCAN FUNKTIONEN
+# ═══════════════════════════════════════════════════════════════
+
+HARDWARE_INFO_FILE = "Hardware_Info.txt"
+
+DRIVER_LINKS = {
+    "asus":    "https://www.asus.com/support/",
+    "gigabyte":"https://www.gigabyte.com/Support",
+    "msi":     "https://www.msi.com/support",
+    "nvidia":  "https://www.nvidia.com/drivers",
+    "amd":     "https://www.amd.com/support",
+    "intel":   "https://www.intel.com/content/www/us/en/download-center/home.html",
+    "realtek": "https://www.realtek.com/en/downloads",
+    "qualcomm":"https://www.qualcomm.com/support",
+}
+
+def get_driver_link(component_name):
+    """Passenden Treiber-Link anhand des Komponentennamens finden."""
+    name_lower = component_name.lower()
+    for brand, link in DRIVER_LINKS.items():
+        if brand in name_lower:
+            return link
+    return "https://www.google.com/search?q=" + component_name.replace(" ", "+") + "+driver+download"
+
+def scan_hardware():
+    """
+    Hardware-Komponenten auslesen via WMI/Registry.
+    Gibt dict mit gefundenen Komponenten zurück.
+    Fehler werden gesammelt, nicht abgebrochen.
+    """
+    hardware = {}
+    errors = []
+
+    # Mainboard
+    try:
+        result = subprocess.run(
+            ["wmic", "baseboard", "get", "Manufacturer,Product", "/format:csv"],
+            capture_output=True, text=True, timeout=15
+        )
+        for line in result.stdout.splitlines():
+            if line.strip() and "Node" not in line and "," in line:
+                parts = line.strip().split(",")
+                if len(parts) >= 3:
+                    manufacturer = parts[1].strip()
+                    product = parts[2].strip()
+                    if manufacturer and product:
+                        hardware["Mainboard"] = f"{manufacturer} {product}"
+                        break
+    except Exception as e:
+        errors.append(f"Mainboard: {e}")
+
+    # CPU
+    try:
+        result = subprocess.run(
+            ["wmic", "cpu", "get", "Name", "/format:csv"],
+            capture_output=True, text=True, timeout=15
+        )
+        for line in result.stdout.splitlines():
+            if line.strip() and "Node" not in line and "," in line:
+                parts = line.strip().split(",")
+                if len(parts) >= 2 and parts[1].strip():
+                    hardware["CPU"] = parts[1].strip()
+                    break
+    except Exception as e:
+        errors.append(f"CPU: {e}")
+
+    # GPU
+    try:
+        result = subprocess.run(
+            ["wmic", "path", "win32_VideoController", "get", "Name", "/format:csv"],
+            capture_output=True, text=True, timeout=15
+        )
+        gpus = []
+        for line in result.stdout.splitlines():
+            if line.strip() and "Node" not in line and "," in line:
+                parts = line.strip().split(",")
+                if len(parts) >= 2 and parts[1].strip():
+                    gpus.append(parts[1].strip())
+        if gpus:
+            hardware["GPU"] = " | ".join(gpus)
+    except Exception as e:
+        errors.append(f"GPU: {e}")
+
+    # RAM
+    try:
+        result = subprocess.run(
+            ["wmic", "computersystem", "get", "TotalPhysicalMemory", "/format:csv"],
+            capture_output=True, text=True, timeout=15
+        )
+        for line in result.stdout.splitlines():
+            if line.strip() and "Node" not in line and "," in line:
+                parts = line.strip().split(",")
+                if len(parts) >= 2 and parts[1].strip():
+                    ram_bytes = int(parts[1].strip())
+                    ram_gb = round(ram_bytes / (1024**3), 1)
+                    hardware["RAM"] = f"{ram_gb} GB"
+                    break
+    except Exception as e:
+        errors.append(f"RAM: {e}")
+
+    # LAN
+    try:
+        result = subprocess.run(
+            ["wmic", "nic", "where", "PhysicalAdapter=TRUE", "get", "Name", "/format:csv"],
+            capture_output=True, text=True, timeout=15
+        )
+        nics = []
+        for line in result.stdout.splitlines():
+            if line.strip() and "Node" not in line and "," in line:
+                parts = line.strip().split(",")
+                if len(parts) >= 2 and parts[1].strip():
+                    nics.append(parts[1].strip())
+        if nics:
+            hardware["LAN"] = " | ".join(nics)
+    except Exception as e:
+        errors.append(f"LAN: {e}")
+
+    # Audio
+    try:
+        result = subprocess.run(
+            ["wmic", "sounddev", "get", "Name", "/format:csv"],
+            capture_output=True, text=True, timeout=15
+        )
+        audio = []
+        for line in result.stdout.splitlines():
+            if line.strip() and "Node" not in line and "," in line:
+                parts = line.strip().split(",")
+                if len(parts) >= 2 and parts[1].strip():
+                    audio.append(parts[1].strip())
+        if audio:
+            hardware["Audio"] = " | ".join(audio)
+    except Exception as e:
+        errors.append(f"Audio: {e}")
+
+    # Windows Version
+    try:
+        hardware["Windows"] = platform.version()
+        hardware["Windows Name"] = platform.win32_ver()[0]
+    except Exception as e:
+        errors.append(f"Windows: {e}")
+
+    return hardware, errors
+
+
+def save_hardware_info(hardware, errors, save_path):
+    """Hardware_Info.txt speichern mit Komponenten und Download-Links."""
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    with open(save_path, "w", encoding="utf-8") as f:
+        f.write("=" * 60 + "\n")
+        f.write("  Hardware Info\n")
+        f.write(f"  Erstellt am: {datetime.datetime.now().strftime('%d.%m.%Y %H:%M')}\n")
+        f.write("=" * 60 + "\n\n")
+
+        for component, value in hardware.items():
+            f.write(f"{component}: {value}\n")
+            if component not in ("RAM", "Windows", "Windows Name"):
+                link = get_driver_link(value)
+                f.write(f"  → Treiber: {link}\n")
+            f.write("\n")
+
+        if errors:
+            f.write("\n" + "=" * 60 + "\n")
+            f.write("WARNUNGEN (nicht alle Komponenten auslesbar):\n")
+            for err in errors:
+                f.write(f"  ⚠️  {err}\n")
+
+    return save_path
+
+
+def find_hardware_info_on_usb():
+    """Hardware_Info.txt auf USB-Sticks suchen."""
+    for usb in find_usb_sticks():
+        hw_path = os.path.join(usb, "Treiber", HARDWARE_INFO_FILE)
+        if os.path.exists(hw_path):
+            return hw_path, usb
+    return None, None
+

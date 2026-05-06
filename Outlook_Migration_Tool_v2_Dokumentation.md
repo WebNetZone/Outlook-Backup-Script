@@ -2,7 +2,7 @@
 > **Status:** Planung abgeschlossen – bereit zur Entwicklung  
 > **Sprache:** Python + BAT Launcher  
 > **Plattform:** Windows 10 / 11  
-> **Version:** 2.0.0  
+> **Version:** 3.0.0  
 
 ---
 
@@ -60,13 +60,104 @@ Script startet
 │   └── Keine Rechte → Automatisch UAC Fenster → Neustart als Admin
 │
 ├── USB-Stick suchen
-│   ├── Konfig gefunden → Szenario 2 (Neuer PC)
-│   └── Keine Konfig → Szenario 1 (Alter PC)
+│   ├── Konfig gefunden → Szenario 2 (Neuer PC – Import)
+│   └── Keine Konfig gefunden →
+│       ├── Hardware_Info.txt vorhanden?
+│       │   ├── JA → Szenario 1 (Alter PC – Outlook Backup)
+│       │   │       + Option "Erneut scannen" anbieten
+│       │   └── NEIN → Abfrage: Hardware scannen?
+│       │       ├── JA → Szenario 0 (Hardware Scan)
+│       │       └── NEIN → Szenario 1 (Alter PC – Outlook Backup)
 ```
 
 ---
 
-## 4. Szenario 1 – Alter PC (Keine Konfig gefunden)
+
+## 4. Szenario 0 – Hardware Scan (Neuer PC, brandneuer Stick)
+
+### 4.1 Wann wird dieser Modus ausgeführt?
+
+- Kein Konfig auf Stick
+- Keine Hardware_Info.txt auf Stick
+- Benutzer wählt "Hardware scannen"
+
+### 4.2 Ablauf
+
+```
+Szenario 0 startet
+│
+├── Hardware Komponenten auslesen
+│   ├── Mainboard Modell
+│   ├── GPU Modell
+│   ├── CPU Modell
+│   ├── LAN Karte
+│   ├── Audio Chip
+│   ├── RAM Größe
+│   └── Fehler beim Auslesen → Trotzdem speichern was gefunden wurde + Warnung
+│
+├── Treiber Ordner erstellen
+│   ├── USB-Stick/Treiber/ erstellen
+│   └── Fehler → Alternativen Speicherort vorschlagen
+│
+├── Hardware_Info.txt speichern
+│   ├── Komponenten-Namen
+│   └── Download-Links zu Treiber-Webseiten
+│
+└── Fertig → Stick raus ✅
+    Nächster Schritt: Zum alten PC gehen
+```
+
+### 4.3 Hardware_Info.txt Beispiel
+
+```
+Hardware Info - 06.05.2026
+==============================
+
+Mainboard: ASUS ROG STRIX Z890-E
+→ https://www.asus.com/motherboards/rog-strix-z890-e/helpdesk_download
+
+GPU: GIGABYTE RTX 5070 Ti
+→ https://www.nvidia.com/drivers
+
+CPU: Intel Core Ultra 7 265KF
+→ https://www.intel.com/content/www/us/en/download-center
+
+LAN: Intel I226-V
+→ https://www.intel.com/content/www/us/en/download-center
+
+Audio: Realtek ALC4080
+→ https://www.realtek.com/downloads
+
+RAM: 32 GB DDR5
+CPU Kerne: 24
+```
+
+### 4.4 Ordnerstruktur auf Stick nach Scan
+
+```
+USB-Stick/
+│
+├── start.bat
+├── outlook_migration.py
+├── requirements.txt
+├── README.md
+│
+└── Treiber/
+    └── Hardware_Info.txt    ← Automatisch erstellt
+        (Treiber hier manuell ablegen)
+```
+
+### 4.5 Fehlerbehandlung Hardware Scan
+
+| # | Situation | Lösung |
+|---|-----------|--------|
+| H1 | Hardware nicht auslesbar | Trotzdem speichern + Warnung |
+| H2 | Treiber Ordner nicht erstellbar | Alternativen Speicherort vorschlagen |
+| H3 | Benutzer will erneut scannen | Option "Erneut scannen" Button |
+
+---
+
+## 5. Szenario 1 – Alter PC (Keine Konfig gefunden)
 
 ### 4.1 Ablauf
 
@@ -147,7 +238,7 @@ Outlook_Backup_2026-05-06/
 
 ---
 
-## 5. Szenario 2 – Neuer PC (Konfig gefunden)
+## 6. Szenario 2 – Neuer PC (Konfig gefunden)
 
 ### 5.1 Start – Abfrage
 
@@ -221,7 +312,7 @@ Kopieren & Importieren gewählt
 
 ---
 
-## 6. Abschlussbericht
+## 7. Abschlussbericht
 
 ```
 ✅ Erfolgreich:
@@ -245,7 +336,7 @@ Kopieren & Importieren gewählt
 
 ---
 
-## 7. Vollständige Fehlerbehandlung
+## 8. Vollständige Fehlerbehandlung
 
 ### 7.1 Launcher
 
@@ -290,7 +381,7 @@ Kopieren & Importieren gewählt
 
 ---
 
-## 8. Technische Details
+## 9. Technische Details
 
 ### 8.1 Konfig-Datei (config.json)
 
@@ -333,21 +424,22 @@ Kopieren & Importieren gewählt
 
 ---
 
-## 9. Entwicklungsschritte
+## 10. Entwicklungsschritte
 
 1. BAT Launcher erstellen
 2. Script Grundgerüst & GUI
 3. Admin-Rechte & USB Erkennung
-4. Szenario 1 – Alter PC komplett
-5. Netzwerkfreigabe einrichten
-6. Konfig-Datei erstellen
-7. Szenario 2 – Neuer PC komplett
-8. Netzwerk & Stick Kopierfunktion
-9. Vollständigkeitsprüfung
-10. Outlook Import
-11. Abschlussbericht
-12. Fehlerbehandlung alle Fälle
-13. Testen & Feinschliff
+4. Szenario 0 – Hardware Scan
+5. Szenario 1 – Alter PC komplett
+6. Netzwerkfreigabe einrichten
+7. Konfig-Datei erstellen
+8. Szenario 2 – Neuer PC komplett
+9. Netzwerk & Stick Kopierfunktion
+10. Vollständigkeitsprüfung
+11. Outlook Import
+12. Abschlussbericht
+13. Fehlerbehandlung alle Fälle
+14. Testen & Feinschliff
 
 ---
 
