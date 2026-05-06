@@ -1,4 +1,4 @@
-# 🔄 Outlook Migration Tool v2.0.0
+# 🔄 Outlook Migration Tool v3.0.0
 
 Vollautomatische Outlook Sicherung & Migration mit grafischer Benutzeroberfläche.
 Ein einziges Script das auf dem **alten UND neuen PC** läuft – erkennt automatisch den Modus.
