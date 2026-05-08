@@ -201,7 +201,7 @@ def file_checksum(path):
 
 def get_windows_users():
     users = []
-    users_dir = os.path.join(os.environ.get("SystemDrive", "C:"), "\\Users")
+    users_dir = os.path.join(os.environ.get("SystemDrive", "C:") + "\\", "Users")
     try:
         for entry in os.scandir(users_dir):
             if entry.is_dir() and entry.name not in (
@@ -937,6 +937,15 @@ class MigrationApp:
     # ── TAB 4: AUSFÜHREN ──────────────────────────────────────
 
     def _build_run_tab(self):
+        # Buttons zuerst mit side=BOTTOM packen damit sie immer sichtbar bleiben
+        bf = Frame(self.tab_run, bg=BG_DARK)
+        bf.pack(side=BOTTOM, pady=12)
+        self.btn_start = self._btn(bf, "🚀 Sicherung starten", self._start, color=ACCENT_GREEN, width=20)
+        self.btn_start.pack(side=LEFT, padx=8)
+        self.btn_cancel = self._btn(bf, "⛔ Abbrechen", self._cancel, color=ACCENT_RED, width=14)
+        self.btn_cancel.pack(side=LEFT, padx=8)
+        self.btn_cancel.config(state=DISABLED)
+
         sum_c = self._card(self.tab_run, "📊 Zusammenfassung")
         self.lbl_summary = Label(sum_c, text="Bitte Einstellungen und PST-Dateien zuerst auswählen.",
                                   font=("Segoe UI", 10), bg=BG_CARD, fg=TEXT_GRAY, justify=LEFT)
@@ -957,19 +966,11 @@ class MigrationApp:
         self.lbl_speed.pack(anchor=W)
 
         log_c = self._card(self.tab_run, "📋 Log")
-        self.log_text = ScrolledText(log_c, height=10, bg=BG_PANEL, fg=TEXT_WHITE,
+        self.log_text = ScrolledText(log_c, height=8, bg=BG_PANEL, fg=TEXT_WHITE,
                                       font=("Consolas", 9), relief=FLAT,
                                       insertbackground=TEXT_WHITE)
-        self.log_text.pack(fill=BOTH, expand=True)
+        self.log_text.pack(fill=X)
         self.log_text.config(state=DISABLED)
-
-        bf = Frame(self.tab_run, bg=BG_DARK)
-        bf.pack(pady=12)
-        self.btn_start = self._btn(bf, "🚀 Starten", self._start, color=ACCENT_GREEN, width=18)
-        self.btn_start.pack(side=LEFT, padx=8)
-        self.btn_cancel = self._btn(bf, "⛔ Abbrechen", self._cancel, color=ACCENT_RED, width=14)
-        self.btn_cancel.pack(side=LEFT, padx=8)
-        self.btn_cancel.config(state=DISABLED)
 
     # ── TAB 5: ERGEBNIS ───────────────────────────────────────
 
@@ -1042,22 +1043,21 @@ class MigrationApp:
         self.lbl_detect_status.config(text="🔍 Suche USB-Stick...")
 
         def detect():
-            config_path, config, usb = find_config_on_usb()
-
-            if config:
-                # Konfig gefunden → Neuer PC Import Modus
-                self.usb_config = config
-                self.config_path = config_path
-                self.root.after(0, lambda: self._found_config(config, usb))
-            else:
-                # Kein Konfig → Hardware_Info.txt prüfen
-                hw_path, usb = find_hardware_info_on_usb()
-                if hw_path:
-                    # Hardware bereits gescannt → Alter PC Modus
-                    self.root.after(0, lambda: self._hardware_already_scanned(hw_path, usb))
+            try:
+                config_path, config, usb = find_config_on_usb()
+                if config:
+                    self.usb_config = config
+                    self.config_path = config_path
+                    self.root.after(0, lambda: self._found_config(config, usb))
                 else:
-                    # Nichts gefunden → Abfrage Hardware scannen?
-                    self.root.after(0, lambda: self._ask_hardware_scan())
+                    hw_path, usb = find_hardware_info_on_usb()
+                    if hw_path:
+                        self.root.after(0, lambda: self._hardware_already_scanned(hw_path, usb))
+                    else:
+                        self.root.after(0, lambda: self._ask_hardware_scan())
+            except Exception as e:
+                self.root.after(0, lambda: self.lbl_detect_status.config(
+                    text=f"❌ Fehler bei Erkennung: {e}", fg=ACCENT_RED))
 
         threading.Thread(target=detect, daemon=True).start()
 
@@ -1142,32 +1142,40 @@ class MigrationApp:
         self.scan_progress.start(10)
 
         def do_scan():
-            # Hardware auslesen
-            hardware, errors = scan_hardware()
-
-            # Speicherort bestimmen
-            usbs = find_usb_sticks()
-            if usbs:
-                save_dir = os.path.join(usbs[0], "Treiber")
-                self.usb_root.set(usbs[0])
-            else:
-                # Kein USB-Stick → alternativen Speicherort vorschlagen
-                self.root.after(0, lambda: self._ask_alt_save_location(hardware, errors))
-                return
-
-            save_path = os.path.join(save_dir, HARDWARE_INFO_FILE)
-
             try:
-                saved = save_hardware_info(hardware, errors, save_path)
-                self.root.after(0, lambda: self._scan_done(hardware, errors, saved))
+                hardware, errors = scan_hardware()
+                usbs = find_usb_sticks()
+                if usbs:
+                    save_dir = os.path.join(usbs[0], "Treiber")
+                    self.usb_root.set(usbs[0])
+                    save_path = os.path.join(save_dir, HARDWARE_INFO_FILE)
+                    try:
+                        saved = save_hardware_info(hardware, errors, save_path)
+                        self.root.after(0, lambda: self._scan_done(hardware, errors, saved))
+                    except Exception:
+                        self.root.after(0, lambda: self._ask_alt_save_location(hardware, errors))
+                else:
+                    self.root.after(0, lambda: self._ask_alt_save_location(hardware, errors))
             except Exception as e:
-                self.root.after(0, lambda: self._ask_alt_save_location(hardware, errors))
+                self.root.after(0, lambda: self._stop_scan_on_error(str(e)))
 
         threading.Thread(target=do_scan, daemon=True).start()
 
+    def _stop_scan_on_error(self, error_msg):
+        try:
+            self.scan_progress.stop()
+            self.scan_progress.pack_forget()
+        except Exception:
+            pass
+        self.lbl_detect_status.config(text="❌ Fehler beim Hardware-Scan!", fg=ACCENT_RED)
+        messagebox.showerror("Fehler", f"Hardware-Scan fehlgeschlagen:\n{error_msg}")
+
     def _ask_alt_save_location(self, hardware, errors):
         """Alternativen Speicherort vorschlagen wenn USB nicht beschreibbar."""
-        self.scan_progress.stop()
+        try:
+            self.scan_progress.stop()
+        except Exception:
+            pass
         path = filedialog.askdirectory(title="Speicherort für Hardware_Info.txt wählen")
         if path:
             save_path = os.path.join(path, "Treiber", HARDWARE_INFO_FILE)
@@ -1228,6 +1236,8 @@ class MigrationApp:
             self._init_old_pc()
         else:
             self.lbl_mode.config(text="💻  Modus: Neuer PC")
+            self.notebook.select(3)
+            self._goto_run()
 
     def _init_old_pc(self):
         # Outlook erkennen
@@ -1580,8 +1590,9 @@ class MigrationApp:
                         f.write("\n")
                 self.results["success"].append(f"Kontodaten ({len(accounts)} Konto/Konten)")
             else:
-                self.results["warning"].append("Kontodaten: Nicht automatisch auslesbar")
-                self.root.after(0, lambda: self._manual_account(acc_file))
+                self.results["warning"].append(
+                    "Kontodaten: Nicht auslesbar (bei Outlook 365 normal – Account auf neuem PC einfach neu anmelden)"
+                )
 
         # ── Netzwerkfreigabe erstellen
         if sel_psts and not self.cancel_event.is_set():
@@ -1953,6 +1964,138 @@ class MigrationApp:
 # MAIN
 # ═══════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════
+# HARDWARE SCAN FUNKTIONEN
+# ═══════════════════════════════════════════════════════════════
+
+HARDWARE_INFO_FILE = "Hardware_Info.txt"
+
+DRIVER_LINKS = {
+    "asus":    "https://www.asus.com/support/",
+    "gigabyte":"https://www.gigabyte.com/Support",
+    "msi":     "https://www.msi.com/support",
+    "nvidia":  "https://www.nvidia.com/drivers",
+    "amd":     "https://www.amd.com/support",
+    "intel":   "https://www.intel.com/content/www/us/en/download-center/home.html",
+    "realtek": "https://www.realtek.com/en/downloads",
+    "qualcomm":"https://www.qualcomm.com/support",
+}
+
+def get_driver_link(component_name):
+    name_lower = component_name.lower()
+    for brand, link in DRIVER_LINKS.items():
+        if brand in name_lower:
+            return link
+    return "https://www.google.com/search?q=" + component_name.replace(" ", "+") + "+driver+download"
+
+def scan_hardware():
+    hardware = {}
+    errors = []
+    try:
+        result = subprocess.run(["wmic", "baseboard", "get", "Manufacturer,Product", "/format:csv"], capture_output=True, text=True, timeout=15)
+        for line in result.stdout.splitlines():
+            if line.strip() and "Node" not in line and "," in line:
+                parts = line.strip().split(",")
+                if len(parts) >= 3:
+                    manufacturer = parts[1].strip()
+                    product = parts[2].strip()
+                    if manufacturer and product:
+                        hardware["Mainboard"] = f"{manufacturer} {product}"
+                        break
+    except Exception as e:
+        errors.append(f"Mainboard: {e}")
+    try:
+        result = subprocess.run(["wmic", "cpu", "get", "Name", "/format:csv"], capture_output=True, text=True, timeout=15)
+        for line in result.stdout.splitlines():
+            if line.strip() and "Node" not in line and "," in line:
+                parts = line.strip().split(",")
+                if len(parts) >= 2 and parts[1].strip():
+                    hardware["CPU"] = parts[1].strip()
+                    break
+    except Exception as e:
+        errors.append(f"CPU: {e}")
+    try:
+        result = subprocess.run(["wmic", "path", "win32_VideoController", "get", "Name", "/format:csv"], capture_output=True, text=True, timeout=15)
+        gpus = []
+        for line in result.stdout.splitlines():
+            if line.strip() and "Node" not in line and "," in line:
+                parts = line.strip().split(",")
+                if len(parts) >= 2 and parts[1].strip():
+                    gpus.append(parts[1].strip())
+        if gpus:
+            hardware["GPU"] = " | ".join(gpus)
+    except Exception as e:
+        errors.append(f"GPU: {e}")
+    try:
+        result = subprocess.run(["wmic", "computersystem", "get", "TotalPhysicalMemory", "/format:csv"], capture_output=True, text=True, timeout=15)
+        for line in result.stdout.splitlines():
+            if line.strip() and "Node" not in line and "," in line:
+                parts = line.strip().split(",")
+                if len(parts) >= 2 and parts[1].strip():
+                    ram_bytes = int(parts[1].strip())
+                    hardware["RAM"] = f"{round(ram_bytes / (1024**3), 1)} GB"
+                    break
+    except Exception as e:
+        errors.append(f"RAM: {e}")
+    try:
+        result = subprocess.run(["wmic", "nic", "where", "PhysicalAdapter=TRUE", "get", "Name", "/format:csv"], capture_output=True, text=True, timeout=15)
+        nics = []
+        for line in result.stdout.splitlines():
+            if line.strip() and "Node" not in line and "," in line:
+                parts = line.strip().split(",")
+                if len(parts) >= 2 and parts[1].strip():
+                    nics.append(parts[1].strip())
+        if nics:
+            hardware["LAN"] = " | ".join(nics)
+    except Exception as e:
+        errors.append(f"LAN: {e}")
+    try:
+        result = subprocess.run(["wmic", "sounddev", "get", "Name", "/format:csv"], capture_output=True, text=True, timeout=15)
+        audio = []
+        for line in result.stdout.splitlines():
+            if line.strip() and "Node" not in line and "," in line:
+                parts = line.strip().split(",")
+                if len(parts) >= 2 and parts[1].strip():
+                    audio.append(parts[1].strip())
+        if audio:
+            hardware["Audio"] = " | ".join(audio)
+    except Exception as e:
+        errors.append(f"Audio: {e}")
+    try:
+        hardware["Windows"] = platform.version()
+        hardware["Windows Name"] = platform.win32_ver()[0]
+    except Exception as e:
+        errors.append(f"Windows: {e}")
+    return hardware, errors
+
+def save_hardware_info(hardware, errors, save_path):
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    with open(save_path, "w", encoding="utf-8") as f:
+        f.write("=" * 60 + "\n")
+        f.write("  Hardware Info\n")
+        f.write(f"  Erstellt am: {datetime.datetime.now().strftime('%d.%m.%Y %H:%M')}\n")
+        f.write("=" * 60 + "\n\n")
+        for component, value in hardware.items():
+            f.write(f"{component}: {value}\n")
+            if component not in ("RAM", "Windows", "Windows Name"):
+                link = get_driver_link(value)
+                f.write(f"  Treiber: {link}\n")
+            f.write("\n")
+        if errors:
+            f.write("\n" + "=" * 60 + "\n")
+            f.write("WARNUNGEN:\n")
+            for err in errors:
+                f.write(f"  {err}\n")
+    return save_path
+
+def find_hardware_info_on_usb():
+    for usb in find_usb_sticks():
+        hw_path = os.path.join(usb, "Treiber", HARDWARE_INFO_FILE)
+        if os.path.exists(hw_path):
+            return hw_path, usb
+    return None, None
+
+
 def main():
     if not is_admin():
         try:
@@ -1976,183 +2119,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# ═══════════════════════════════════════════════════════════════
-# HARDWARE SCAN FUNKTIONEN
-# ═══════════════════════════════════════════════════════════════
-
-HARDWARE_INFO_FILE = "Hardware_Info.txt"
-
-DRIVER_LINKS = {
-    "asus":    "https://www.asus.com/support/",
-    "gigabyte":"https://www.gigabyte.com/Support",
-    "msi":     "https://www.msi.com/support",
-    "nvidia":  "https://www.nvidia.com/drivers",
-    "amd":     "https://www.amd.com/support",
-    "intel":   "https://www.intel.com/content/www/us/en/download-center/home.html",
-    "realtek": "https://www.realtek.com/en/downloads",
-    "qualcomm":"https://www.qualcomm.com/support",
-}
-
-def get_driver_link(component_name):
-    """Passenden Treiber-Link anhand des Komponentennamens finden."""
-    name_lower = component_name.lower()
-    for brand, link in DRIVER_LINKS.items():
-        if brand in name_lower:
-            return link
-    return "https://www.google.com/search?q=" + component_name.replace(" ", "+") + "+driver+download"
-
-def scan_hardware():
-    """
-    Hardware-Komponenten auslesen via WMI/Registry.
-    Gibt dict mit gefundenen Komponenten zurück.
-    Fehler werden gesammelt, nicht abgebrochen.
-    """
-    hardware = {}
-    errors = []
-
-    # Mainboard
-    try:
-        result = subprocess.run(
-            ["wmic", "baseboard", "get", "Manufacturer,Product", "/format:csv"],
-            capture_output=True, text=True, timeout=15
-        )
-        for line in result.stdout.splitlines():
-            if line.strip() and "Node" not in line and "," in line:
-                parts = line.strip().split(",")
-                if len(parts) >= 3:
-                    manufacturer = parts[1].strip()
-                    product = parts[2].strip()
-                    if manufacturer and product:
-                        hardware["Mainboard"] = f"{manufacturer} {product}"
-                        break
-    except Exception as e:
-        errors.append(f"Mainboard: {e}")
-
-    # CPU
-    try:
-        result = subprocess.run(
-            ["wmic", "cpu", "get", "Name", "/format:csv"],
-            capture_output=True, text=True, timeout=15
-        )
-        for line in result.stdout.splitlines():
-            if line.strip() and "Node" not in line and "," in line:
-                parts = line.strip().split(",")
-                if len(parts) >= 2 and parts[1].strip():
-                    hardware["CPU"] = parts[1].strip()
-                    break
-    except Exception as e:
-        errors.append(f"CPU: {e}")
-
-    # GPU
-    try:
-        result = subprocess.run(
-            ["wmic", "path", "win32_VideoController", "get", "Name", "/format:csv"],
-            capture_output=True, text=True, timeout=15
-        )
-        gpus = []
-        for line in result.stdout.splitlines():
-            if line.strip() and "Node" not in line and "," in line:
-                parts = line.strip().split(",")
-                if len(parts) >= 2 and parts[1].strip():
-                    gpus.append(parts[1].strip())
-        if gpus:
-            hardware["GPU"] = " | ".join(gpus)
-    except Exception as e:
-        errors.append(f"GPU: {e}")
-
-    # RAM
-    try:
-        result = subprocess.run(
-            ["wmic", "computersystem", "get", "TotalPhysicalMemory", "/format:csv"],
-            capture_output=True, text=True, timeout=15
-        )
-        for line in result.stdout.splitlines():
-            if line.strip() and "Node" not in line and "," in line:
-                parts = line.strip().split(",")
-                if len(parts) >= 2 and parts[1].strip():
-                    ram_bytes = int(parts[1].strip())
-                    ram_gb = round(ram_bytes / (1024**3), 1)
-                    hardware["RAM"] = f"{ram_gb} GB"
-                    break
-    except Exception as e:
-        errors.append(f"RAM: {e}")
-
-    # LAN
-    try:
-        result = subprocess.run(
-            ["wmic", "nic", "where", "PhysicalAdapter=TRUE", "get", "Name", "/format:csv"],
-            capture_output=True, text=True, timeout=15
-        )
-        nics = []
-        for line in result.stdout.splitlines():
-            if line.strip() and "Node" not in line and "," in line:
-                parts = line.strip().split(",")
-                if len(parts) >= 2 and parts[1].strip():
-                    nics.append(parts[1].strip())
-        if nics:
-            hardware["LAN"] = " | ".join(nics)
-    except Exception as e:
-        errors.append(f"LAN: {e}")
-
-    # Audio
-    try:
-        result = subprocess.run(
-            ["wmic", "sounddev", "get", "Name", "/format:csv"],
-            capture_output=True, text=True, timeout=15
-        )
-        audio = []
-        for line in result.stdout.splitlines():
-            if line.strip() and "Node" not in line and "," in line:
-                parts = line.strip().split(",")
-                if len(parts) >= 2 and parts[1].strip():
-                    audio.append(parts[1].strip())
-        if audio:
-            hardware["Audio"] = " | ".join(audio)
-    except Exception as e:
-        errors.append(f"Audio: {e}")
-
-    # Windows Version
-    try:
-        hardware["Windows"] = platform.version()
-        hardware["Windows Name"] = platform.win32_ver()[0]
-    except Exception as e:
-        errors.append(f"Windows: {e}")
-
-    return hardware, errors
-
-
-def save_hardware_info(hardware, errors, save_path):
-    """Hardware_Info.txt speichern mit Komponenten und Download-Links."""
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    with open(save_path, "w", encoding="utf-8") as f:
-        f.write("=" * 60 + "\n")
-        f.write("  Hardware Info\n")
-        f.write(f"  Erstellt am: {datetime.datetime.now().strftime('%d.%m.%Y %H:%M')}\n")
-        f.write("=" * 60 + "\n\n")
-
-        for component, value in hardware.items():
-            f.write(f"{component}: {value}\n")
-            if component not in ("RAM", "Windows", "Windows Name"):
-                link = get_driver_link(value)
-                f.write(f"  → Treiber: {link}\n")
-            f.write("\n")
-
-        if errors:
-            f.write("\n" + "=" * 60 + "\n")
-            f.write("WARNUNGEN (nicht alle Komponenten auslesbar):\n")
-            for err in errors:
-                f.write(f"  ⚠️  {err}\n")
-
-    return save_path
-
-
-def find_hardware_info_on_usb():
-    """Hardware_Info.txt auf USB-Sticks suchen."""
-    for usb in find_usb_sticks():
-        hw_path = os.path.join(usb, "Treiber", HARDWARE_INFO_FILE)
-        if os.path.exists(hw_path):
-            return hw_path, usb
-    return None, None
 
