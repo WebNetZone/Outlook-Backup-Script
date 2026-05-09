@@ -1337,9 +1337,12 @@ class MigrationApp:
         old_ip = config.get("ip_address", "?")
         old_mac = config.get("mac_address", "?")
 
-        # Standardwert für PST-Zielordner setzen falls leer
+        # Standardwert = Outlook Standard-Pfad (wird von Outlook automatisch erkannt)
         if not self.pst_dest.get():
-            default_pst = os.path.join(os.environ.get("USERPROFILE", "C:\\Users"), "Documents", "Outlook Files")
+            default_pst = os.path.join(
+                os.environ.get("USERPROFILE", "C:\\Users"),
+                "AppData", "Local", "Microsoft", "Outlook"
+            )
             self.pst_dest.set(default_pst)
 
         # Verbindung prüfen
