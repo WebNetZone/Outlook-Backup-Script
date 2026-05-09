@@ -213,35 +213,60 @@ def get_windows_users():
     return users
 
 def find_usb_sticks():
-    """Alle USB-Sticks finden."""
+    """Alle USB-Sticks finden (FAT32, exFAT, NTFS - alle removable)."""
     usb_drives = []
+    seen = set()
     try:
         import psutil
         for disk in psutil.disk_partitions():
-            if "removable" in disk.opts.lower() or disk.fstype in ("FAT32", "exFAT", "FAT"):
-                usb_drives.append(disk.mountpoint)
-    except Exception:
-        # Fallback
-        for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
-            drive = f"{letter}:\\"
-            if os.path.exists(drive):
+            is_removable = (
+                "removable" in disk.opts.lower()
+                or disk.fstype in ("FAT32", "exFAT", "FAT", "FAT16")
+            )
+            if not is_removable:
+                # Auch NTFS-Sticks per WinAPI prüfen
                 try:
                     import ctypes as ct
-                    drive_type = ct.windll.kernel32.GetDriveTypeW(drive)
+                    drive_type = ct.windll.kernel32.GetDriveTypeW(disk.mountpoint)
                     if drive_type == 2:  # DRIVE_REMOVABLE
-                        usb_drives.append(drive)
+                        is_removable = True
                 except Exception:
                     pass
+            if is_removable and disk.mountpoint not in seen:
+                seen.add(disk.mountpoint)
+                usb_drives.append(disk.mountpoint)
+    except Exception:
+        pass
+
+    # Fallback falls psutil fehlschlägt
+    if not usb_drives:
+        try:
+            import ctypes as ct
+            for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
+                drive = f"{letter}:\\"
+                if os.path.exists(drive):
+                    drive_type = ct.windll.kernel32.GetDriveTypeW(drive)
+                    if drive_type == 2:
+                        usb_drives.append(drive)
+        except Exception:
+            pass
     return usb_drives
 
 def find_config_on_usb():
-    """Konfig-Datei auf USB-Sticks suchen."""
+    """Konfig-Datei auf USB-Sticks suchen. Laufwerksbuchstabe wird automatisch angepasst."""
     for usb in find_usb_sticks():
         config_path = os.path.join(usb, CONFIG_FILE)
         if os.path.exists(config_path):
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
                     config = json.load(f)
+
+                # Laufwerksbuchstaben im backup_dir auf aktuellen Stick anpassen
+                backup_dir = config.get("backup_dir", "")
+                if backup_dir and len(backup_dir) >= 2 and backup_dir[1] == ":":
+                    usb_drive = os.path.splitdrive(usb)[0]  # z.B. "F:"
+                    config["backup_dir"] = usb_drive + backup_dir[2:]
+
                 return config_path, config, usb
             except Exception:
                 pass
