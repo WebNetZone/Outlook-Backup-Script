@@ -1337,6 +1337,11 @@ class MigrationApp:
         old_ip = config.get("ip_address", "?")
         old_mac = config.get("mac_address", "?")
 
+        # Standardwert für PST-Zielordner setzen falls leer
+        if not self.pst_dest.get():
+            default_pst = os.path.join(os.environ.get("USERPROFILE", "C:\\Users"), "Documents", "Outlook Files")
+            self.pst_dest.set(default_pst)
+
         # Verbindung prüfen
         net_ok = is_host_reachable(old_pc) or is_host_reachable(old_ip)
         if not net_ok and old_mac:
@@ -1346,12 +1351,29 @@ class MigrationApp:
 
         method = "🌐 Netzwerk (alter PC erreichbar)" if net_ok else "💾 USB-Stick (kein Netzwerk)"
         self.lbl_summary.config(
-            text=f"Modus:        Neuer PC\n"
-                 f"Alter PC:     {old_pc} ({old_ip})\n"
+            text=f"Modus:          Neuer PC\n"
+                 f"Alter PC:       {old_pc} ({old_ip})\n"
                  f"Kopier-Methode: {method}\n"
-                 f"USB-Stick:    {usb}",
+                 f"USB-Stick:      {usb}\n"
+                 f"PST-Zielordner: {self.pst_dest.get()}",
             fg=TEXT_WHITE
         )
+
+        # PST-Zielordner Auswahl-Button anzeigen
+        if not hasattr(self, "_pst_dest_frame") or not self.lbl_summary.winfo_exists():
+            return
+        try:
+            self._pst_dest_frame.destroy()
+        except Exception:
+            pass
+        self._pst_dest_frame = Frame(self.lbl_summary.master, bg=BG_CARD)
+        self._pst_dest_frame.pack(anchor=W, pady=(6, 0))
+        Label(self._pst_dest_frame, text="PST-Zielordner:",
+              font=("Segoe UI", 9), bg=BG_CARD, fg=TEXT_GRAY).pack(side=LEFT, padx=(0, 6))
+        Entry(self._pst_dest_frame, textvariable=self.pst_dest, font=("Segoe UI", 9),
+              bg=BG_PANEL, fg=TEXT_WHITE, insertbackground=TEXT_WHITE,
+              relief=FLAT, bd=4, width=38).pack(side=LEFT, padx=(0, 6))
+        self._btn(self._pst_dest_frame, "📂", self._choose_pst_dest, width=3).pack(side=LEFT)
 
     # ── AKTIONEN ──────────────────────────────────────────────
 
@@ -1729,8 +1751,9 @@ class MigrationApp:
         # PST Dateien kopieren
         if pst_files and not self.cancel_event.is_set():
             self._log("\n📁 Kopiere PST-Dateien...")
-            pst_dst_dir = os.path.join(user, "Documents", "Outlook Files")
+            pst_dst_dir = self.pst_dest.get().strip() or os.path.join(user, "Documents", "Outlook Files")
             os.makedirs(pst_dst_dir, exist_ok=True)
+            self._log(f"  Zielordner: {pst_dst_dir}")
 
             progress = load_progress()
             done = progress.get("done", [])
