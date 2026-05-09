@@ -664,6 +664,7 @@ class MigrationApp:
         self.start_time = None
         self.results = {"success": [], "warning": [], "error": []}
         self.share_path = None
+        self.pst_dest = StringVar(value="")
 
         self._build_ui()
         self.root.after(500, self._auto_detect)
@@ -816,6 +817,20 @@ class MigrationApp:
                                     bg=BG_CARD, fg=TEXT_GRAY)
         self.lbl_usb_space.pack(anchor=W, pady=3)
 
+        # PST Zielordner
+        pst_card = self._card(self.sf, "📁 PST Zielordner (optional)")
+        Label(pst_card, text="Ordner wählen wohin PST-Dateien kopiert werden sollen:",
+              font=("Segoe UI", 9), bg=BG_CARD, fg=TEXT_GRAY).pack(anchor=W, pady=(0, 4))
+        pst_row = Frame(pst_card, bg=BG_CARD)
+        pst_row.pack(fill=X)
+        Entry(pst_row, textvariable=self.pst_dest, font=("Segoe UI", 10),
+              bg=BG_PANEL, fg=TEXT_WHITE, insertbackground=TEXT_WHITE,
+              relief=FLAT, bd=5, width=45).pack(side=LEFT, padx=(0, 8))
+        self._btn(pst_row, "📂 Wählen", self._choose_pst_dest, width=10).pack(side=LEFT)
+        self._btn(pst_row, "✖ Leer", lambda: self.pst_dest.set(""), width=6).pack(side=LEFT, padx=(4, 0))
+        Label(pst_card, text="Leer lassen = PST-Dateien werden nicht extra kopiert",
+              font=("Segoe UI", 8), bg=BG_CARD, fg=TEXT_GRAY).pack(anchor=W, pady=(3, 0))
+
         # Optionen
         opt_card = self._card(self.sf, "⚙️ Optionen")
         self.opt_signatures = BooleanVar(value=True)
@@ -886,7 +901,7 @@ class MigrationApp:
             is_valid = is_pst_valid(path)
 
             if path not in self.pst_vars:
-                self.pst_vars[path] = BooleanVar(value=is_active and not in_od and is_valid)
+                self.pst_vars[path] = BooleanVar(value=is_valid and not in_od)
 
             row = Frame(self.pst_inner, bg=BG_CARD2, pady=4)
             row.pack(fill=X, padx=5, pady=3)
@@ -1347,6 +1362,11 @@ class MigrationApp:
             free = get_free_space(path)
             self.lbl_usb_space.config(text=f"Freier Speicher: {format_size(free)}", fg=ACCENT_GREEN)
 
+    def _choose_pst_dest(self):
+        path = filedialog.askdirectory(title="Zielordner für PST-Dateien wählen")
+        if path:
+            self.pst_dest.set(path)
+
     def _goto_pst(self):
         if not self.usb_root.get():
             messagebox.showwarning("USB-Stick", "Bitte zuerst USB-Stick / Zielordner auswählen!")
@@ -1594,15 +1614,35 @@ class MigrationApp:
                     "Kontodaten: Nicht auslesbar (bei Outlook 365 normal – Account auf neuem PC einfach neu anmelden)"
                 )
 
-        # ── Netzwerkfreigabe erstellen
-        if sel_psts and not self.cancel_event.is_set():
+        # ── PST-Dateien in Zielordner kopieren
+        pst_dest = self.pst_dest.get().strip()
+        if sel_psts and pst_dest and not self.cancel_event.is_set():
+            self._log(f"\n📁 Kopiere PST-Dateien nach: {pst_dest}")
+            self._set_cur("Kopiere PST-Dateien...")
+            os.makedirs(pst_dest, exist_ok=True)
+            for pst_path in sel_psts:
+                if self.cancel_event.is_set():
+                    break
+                pst_name = os.path.basename(pst_path)
+                dst = os.path.join(pst_dest, pst_name)
+                self._log(f"  → {pst_name}")
+                try:
+                    ok, msg = copy_with_progress(pst_path, dst,
+                                                  progress_cb=self._set_progress,
+                                                  cancel_event=self.cancel_event)
+                    if ok:
+                        self.results["success"].append(f"PST kopiert: {pst_name}")
+                    else:
+                        self.results["error"].append(f"PST Fehler: {pst_name}: {msg}")
+                except Exception as e:
+                    self.results["error"].append(f"PST Fehler: {pst_name}: {e}")
+
+        # ── Netzwerkfreigabe erstellen (nur wenn kein Zielordner gewählt)
+        if sel_psts and not pst_dest and not self.cancel_event.is_set():
             self._log("\n🌐 Erstelle Netzwerkfreigabe für PST-Dateien...")
             self._set_cur("Erstelle Netzwerkfreigabe...")
-
-            # PST-Ordner auf Stick vorbereiten (nur Pfade, keine Kopie)
             share_folder = os.path.dirname(sel_psts[0])
             ok, share_unc = create_network_share(share_folder)
-
             if ok:
                 self._log(f"  ✅ Freigabe erstellt: {share_unc}")
                 self.results["success"].append(f"Netzwerkfreigabe: {share_unc}")
