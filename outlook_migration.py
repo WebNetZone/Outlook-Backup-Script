@@ -1678,7 +1678,7 @@ class MigrationApp:
                 self._log(f"  → {pst_name}")
                 try:
                     ok, msg = copy_with_progress(pst_path, dst,
-                                                  progress_cb=self._set_progress,
+                                                  progress_cb=self._file_progress,
                                                   cancel_event=self.cancel_event)
                     if ok:
                         self.results["success"].append(f"PST kopiert: {pst_name}")
