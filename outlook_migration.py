@@ -1553,8 +1553,32 @@ class MigrationApp:
             if not answer:
                 return
 
-        self._goto_run()
         self._update_new_pc_summary(usb, config)
+
+        # PST-Dateien vom Stick laden und PST-Tab zeigen (zur Auswahl)
+        backup_dir_val = config.get("backup_dir", os.path.join(usb, "Outlook_Backup"))
+        self._scan_pst_from_usb(backup_dir_val)
+        self.notebook.select(2)  # PST-Tab
+
+    def _scan_pst_from_usb(self, backup_dir):
+        """PST-Dateien aus dem USB-Backup laden (für Neuer-PC-Modus)."""
+        self.all_pst_files = []
+        self.pst_vars = {}
+        self.pst_group_vars = {}
+
+        # Zuerst PST-Unterordner durchsuchen
+        pst_root = os.path.join(backup_dir, "PST")
+        search_in = pst_root if os.path.isdir(pst_root) else backup_dir
+
+        try:
+            for root, _, files in os.walk(search_in):
+                for f in files:
+                    if f.lower().endswith(".pst"):
+                        self.all_pst_files.append(os.path.join(root, f))
+        except Exception:
+            pass
+
+        self._render_pst()
 
     def _update_new_pc_summary(self, usb, config):
         old_pc = config.get("computer_name", "?")
@@ -2017,16 +2041,12 @@ class MigrationApp:
         old_ip = config.get("ip_address", "")
         old_mac = config.get("mac_address", "")
         share_path = config.get("share_path", "")
-        pst_files = config.get("pst_files", [])
-
         self._log("🌐 Prüfe Verbindung zum alten PC...")
         net_ok = False
-        net_host = None
 
         for host in [old_pc, old_ip]:
             if host and is_host_reachable(host):
                 net_ok = True
-                net_host = host
                 self._log(f"  ✅ Alter PC erreichbar: {host}")
                 break
 
@@ -2035,51 +2055,38 @@ class MigrationApp:
             found = find_host_by_mac(old_mac)
             if found and is_host_reachable(found):
                 net_ok = True
-                net_host = found
                 self._log(f"  ✅ Alter PC gefunden via MAC: {found}")
 
         if not net_ok:
             self._log("  ⚠️  Alter PC nicht erreichbar → Kopiere vom USB-Stick")
             self.results["warning"].append("Netzwerk nicht verfügbar – Daten vom Stick")
 
-        # PST Dateien kopieren
-        if pst_files and not self.cancel_event.is_set():
+        # PST Dateien kopieren – direkt die selektierten Pfade vom PST-Tab (echte USB-Pfade)
+        sel_psts = [p for p, v in self.pst_vars.items() if v.get()]
+        if sel_psts and not self.cancel_event.is_set():
             self._log("\n📁 Kopiere PST-Dateien...")
-            pst_dst_dir = self.pst_dest.get().strip() or os.path.join(user, "Documents", "Outlook Files")
+            pst_dst_dir = self.pst_dest.get().strip() or os.path.join(
+                user, "AppData", "Local", "Microsoft", "Outlook")
             os.makedirs(pst_dst_dir, exist_ok=True)
             self._log(f"  Zielordner: {pst_dst_dir}")
 
             progress = load_progress()
             done = progress.get("done", [])
 
-            for pst_src in pst_files:
+            for src in sel_psts:
                 if self.cancel_event.is_set():
                     break
 
-                pst_name = os.path.basename(pst_src)
+                pst_name = os.path.basename(src)
 
                 if pst_name in done:
                     self._log(f"  ⏩ Übersprungen (bereits kopiert): {pst_name}")
                     continue
 
-                # Quelle bestimmen: Netzwerk oder Stick
-                if net_ok and share_path:
-                    src = os.path.join(share_path, pst_name)
-                    method = "Netzwerk"
-                else:
-                    src = os.path.join(backup_dir, "PST_Dateien", pst_name)
-                    method = "USB-Stick"
-
                 if not os.path.exists(src):
-                    # Fallback versuchen
-                    alt_src = os.path.join(backup_dir, "PST_Dateien", pst_name)
-                    if os.path.exists(alt_src):
-                        src = alt_src
-                        method = "USB-Stick (Fallback)"
-                    else:
-                        self._log(f"  ❌ Nicht gefunden: {pst_name}")
-                        self.results["error"].append(f"PST nicht gefunden: {pst_name}")
-                        continue
+                    self._log(f"  ❌ Nicht gefunden: {src}")
+                    self.results["error"].append(f"PST nicht gefunden: {pst_name}")
+                    continue
 
                 dst = os.path.join(pst_dst_dir, pst_name)
                 self._log(f"  → {pst_name} ({method})")
