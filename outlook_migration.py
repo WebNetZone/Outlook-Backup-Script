@@ -990,6 +990,20 @@ class MigrationApp:
                         bg=BG_CARD, fg=TEXT_WHITE, selectcolor=BG_PANEL,
                         activebackground=BG_CARD, font=("Segoe UI", 10)).pack(anchor=W, pady=2)
 
+        # Office Lizenzkey
+        key_card = self._card(self.sf, "🔑 Office Lizenzkey")
+        Label(key_card, text="Product Key des installierten Office anzeigen:",
+              font=("Segoe UI", 9), bg=BG_CARD, fg=TEXT_GRAY).pack(anchor=W, pady=(0, 6))
+        key_row = Frame(key_card, bg=BG_CARD)
+        key_row.pack(fill=X)
+        self.lbl_office_key = Label(key_row, text="—", font=("Consolas", 12, "bold"),
+                                     bg=BG_CARD, fg=ACCENT_CYAN)
+        self.lbl_office_key.pack(side=LEFT, padx=(0, 10))
+        self._btn(key_row, "🔑 Key anzeigen", self._show_office_key, width=16).pack(side=LEFT, padx=(0, 6))
+        self._btn(key_row, "📋 Kopieren", self._copy_office_key, width=12).pack(side=LEFT)
+        Label(key_card, text="Nur letzten 5 Zeichen sichtbar? → ProduKey von NirSoft für vollen Key",
+              font=("Segoe UI", 8), bg=BG_CARD, fg=TEXT_GRAY).pack(anchor=W, pady=(4, 0))
+
         Frame(self.sf, bg=BG_DARK, height=10).pack()
         self._btn(self.sf, "Weiter →", self._goto_pst, width=20).pack(pady=8)
 
@@ -1659,6 +1673,82 @@ class MigrationApp:
         self._btn(self._pst_dest_frame, "📂", self._choose_pst_dest, width=3).pack(side=LEFT)
 
     # ── AKTIONEN ──────────────────────────────────────────────
+
+    def _show_office_key(self):
+        key = self._read_office_key()
+        self.lbl_office_key.config(text=key if key else "Nicht gefunden",
+                                    fg=ACCENT_CYAN if key else ACCENT_WARN)
+
+    def _copy_office_key(self):
+        key = self.lbl_office_key.cget("text")
+        if key and key not in ("—", "Nicht gefunden"):
+            self.root.clipboard_clear()
+            self.root.clipboard_append(key)
+            messagebox.showinfo("Kopiert", f"Key in Zwischenablage:\n{key}")
+
+    def _read_office_key(self):
+        # Methode 1: OSPP.VBS (zeigt letzten 5 Zeichen)
+        ospp_paths = [
+            r"C:\Program Files\Microsoft Office\Office16\OSPP.VBS",
+            r"C:\Program Files (x86)\Microsoft Office\Office16\OSPP.VBS",
+            r"C:\Program Files\Microsoft Office\root\Office16\OSPP.VBS",
+        ]
+        for ospp in ospp_paths:
+            if os.path.exists(ospp):
+                try:
+                    CREATE_NO_WINDOW = 0x08000000
+                    result = subprocess.run(
+                        ["cscript", "//Nologo", ospp, "/dstatus"],
+                        capture_output=True, text=True, timeout=15,
+                        creationflags=CREATE_NO_WINDOW
+                    )
+                    for line in result.stdout.splitlines():
+                        if "Last 5" in line or "XXXXX-XXXXX-XXXXX-XXXXX-" in line:
+                            return line.strip().split(":")[-1].strip()
+                except Exception:
+                    pass
+
+        # Methode 2: Registry (DigitalProductId dekodieren)
+        try:
+            key_path = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform"
+            reg_paths = [
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Office\16.0\Registration"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Office\16.0\Registration"),
+            ]
+            chars = "BCDFGHJKMPQRTVWXY2346789"
+            for hive, path in reg_paths:
+                try:
+                    with winreg.OpenKey(hive, path) as k:
+                        i = 0
+                        while True:
+                            try:
+                                sub = winreg.EnumKey(k, i)
+                                with winreg.OpenKey(k, sub) as sk:
+                                    try:
+                                        data, _ = winreg.QueryValueEx(sk, "DigitalProductId")
+                                        if len(data) >= 67:
+                                            raw = list(data[52:67])
+                                            decoded = ""
+                                            for _ in range(25):
+                                                n = 0
+                                                for j in range(14, -1, -1):
+                                                    n = (n * 256) ^ raw[j]
+                                                    raw[j] = n // 24
+                                                    n %= 24
+                                                decoded = chars[n] + decoded
+                                            key_str = "-".join([decoded[i:i+5] for i in range(0, 25, 5)])
+                                            if "BBBBB" not in key_str:
+                                                return key_str
+                                    except Exception:
+                                        pass
+                            except OSError:
+                                break
+                            i += 1
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return None
 
     def _choose_usb(self):
         path = filedialog.askdirectory(title="USB-Stick / Zielordner auswählen")
