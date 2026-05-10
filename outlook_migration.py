@@ -468,6 +468,24 @@ def find_all_pst_files(user_profile, log_cb=None):
 
 def get_outlook_account_info(outlook_version):
     accounts = []
+    # Korrekte Registry-Werte für POP3/IMAP/SMTP Konten
+    STRING_FIELDS = {
+        "001e6601": "E-Mail",
+        "001e6602": "Anzeigename",
+        "001e6603": "POP3_Server",
+        "001e6607": "SMTP_Server",
+        "001e6604": "POP3_Benutzername",
+        "001e660a": "SMTP_Benutzername",
+        "001e6605": "IMAP_Server",
+        "001e6608": "IMAP_Benutzername",
+    }
+    DWORD_FIELDS = {
+        "00036603": "POP3_Port",
+        "00036607": "SMTP_Port",
+        "00036605": "IMAP_Port",
+        "00036610": "POP3_SSL",
+        "00036611": "SMTP_SSL",
+    }
     try:
         key_path = rf"Software\Microsoft\Office\{outlook_version}\Outlook\Profiles"
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as profiles:
@@ -486,21 +504,26 @@ def get_outlook_account_info(outlook_version):
                                     acc_info = {"Profil": profile}
                                     try:
                                         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, acc_path) as akey:
-                                            for val_name, friendly in [
-                                                ("001e6601", "E-Mail"),
-                                                ("001e6602", "Anzeigename"),
-                                                ("001e6603", "SMTP Server"),
-                                                ("001e6605", "IMAP Server"),
-                                                ("001e0028", "Benutzername"),
-                                            ]:
+                                            for val_name, friendly in STRING_FIELDS.items():
+                                                try:
+                                                    val, vtype = winreg.QueryValueEx(akey, val_name)
+                                                    if isinstance(val, (str, bytes)) and val:
+                                                        if isinstance(val, bytes):
+                                                            val = val.rstrip(b'\x00').decode('utf-8', errors='ignore')
+                                                        acc_info[friendly] = val
+                                                except Exception:
+                                                    pass
+                                            for val_name, friendly in DWORD_FIELDS.items():
                                                 try:
                                                     val, _ = winreg.QueryValueEx(akey, val_name)
-                                                    acc_info[friendly] = val
+                                                    if isinstance(val, int):
+                                                        acc_info[friendly] = val
                                                 except Exception:
                                                     pass
                                     except Exception:
                                         pass
-                                    if len(acc_info) > 1:
+                                    # Nur echte Konten speichern (haben E-Mail-Adresse)
+                                    if acc_info.get("E-Mail") and "@" in acc_info["E-Mail"]:
                                         accounts.append(acc_info)
                                     j += 1
                                 except OSError:
@@ -513,6 +536,80 @@ def get_outlook_account_info(outlook_version):
     except Exception:
         pass
     return accounts
+
+
+def generate_prf_file(accounts, prf_path, profile_name="Outlook"):
+    """Outlook PRF-Datei aus gesicherten Kontodaten generieren."""
+    lines = [
+        "[General]",
+        "Custom=1",
+        f"ProfileName={profile_name}",
+        "DefaultProfile=Yes",
+        "",
+        f"[{profile_name}]",
+        "RegistryBasePath=Software\\Microsoft\\Windows NT\\CurrentVersion"
+        "\\Windows Messaging Subsystem\\Profiles",
+        "",
+    ]
+    acc_count = 0
+    for acc in accounts:
+        email = acc.get("E-Mail", "")
+        if not email or "@" not in email:
+            continue
+        acc_count += 1
+        name = f"Account#{acc_count}"
+        pop3 = acc.get("POP3_Server", "")
+        imap = acc.get("IMAP_Server", "")
+        smtp = acc.get("SMTP_Server", "")
+        user = acc.get("POP3_Benutzername") or acc.get("IMAP_Benutzername") or email
+        display = acc.get("Anzeigename", email)
+        atype = "IMAP" if imap else "POP3"
+        server = imap if imap else pop3
+        port_in = acc.get("IMAP_Port", 993) if imap else acc.get("POP3_Port", 995)
+        port_out = acc.get("SMTP_Port", 587)
+        ssl_in = acc.get("IMAP_SSL", acc.get("POP3_SSL", 1))
+
+        lines += [
+            f"[{name}]",
+            f"DisplayName={display}",
+            f"AccountType={atype}",
+            f"ConnectionType=LAN",
+            f"EmailAddress={email}",
+            f"UserName={user}",
+            f"IncomingServer={server}",
+            f"OutgoingServer={smtp}",
+            f"IncomingServerPort={port_in}",
+            f"OutgoingServerPort={port_out}",
+            f"IncomingServerSSL={'1' if ssl_in else '0'}",
+            f"OutgoingServerSSL={'1' if port_out == 465 else '0'}",
+            f"OutgoingSMTPAuthenticate=1",
+            "",
+        ]
+    if acc_count == 0:
+        return False, "Keine gültigen Konten gefunden"
+    try:
+        with open(prf_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        return True, prf_path
+    except Exception as e:
+        return False, str(e)
+
+
+def import_prf_file(prf_path):
+    """Outlook PRF-Datei importieren."""
+    outlook_exe_paths = [
+        r"C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE",
+        r"C:\Program Files (x86)\Microsoft Office\root\Office16\OUTLOOK.EXE",
+        r"C:\Program Files\Microsoft Office\Office16\OUTLOOK.EXE",
+    ]
+    for exe in outlook_exe_paths:
+        if os.path.exists(exe):
+            try:
+                subprocess.Popen([exe, f"/IMPORTPRF", prf_path])
+                return True, exe
+            except Exception as e:
+                return False, str(e)
+    return False, "OUTLOOK.EXE nicht gefunden"
 
 # ═══════════════════════════════════════════════════════════════
 # NETZWERKFREIGABE
@@ -2300,17 +2397,43 @@ class MigrationApp:
         # Konten-Profile importieren (nur klassisches Outlook, nicht App-Version)
         is_new_outlook = "App-Version" in (self.outlook_version_name or "")
         if not is_new_outlook and not self.cancel_event.is_set():
-            reg_file = os.path.join(backup_dir, "Konten_Profile.reg")
-            if os.path.exists(reg_file):
-                self._log("\n📧 Importiere Outlook-Konten (Registry)...")
-                self._set_cur("Importiere Konten...")
-                ok, msg = import_outlook_profiles(backup_dir)
-                if ok:
-                    self._log("  ✅ Konten importiert – Outlook fragt beim Start nach dem Passwort")
-                    self.results["success"].append("Konten-Profile importiert (Passwort beim Start eingeben)")
-                else:
-                    self._log(f"  ⚠️  Konten-Import fehlgeschlagen: {msg}")
-                    self.results["warning"].append(f"Konten-Import: {msg}")
+            self._log("\n📧 Importiere Outlook-Konten...")
+            self._set_cur("Importiere Konten...")
+
+            # Methode 1: PRF-Datei aus gesichertem JSON generieren
+            json_file = os.path.join(backup_dir, "Konten_Info.json")
+            prf_done = False
+            if os.path.exists(json_file):
+                try:
+                    import json as _json
+                    with open(json_file, "r", encoding="utf-8") as f:
+                        accounts = _json.load(f)
+                    prf_path = os.path.join(backup_dir, "Konten_Import.prf")
+                    ok, msg = generate_prf_file(accounts, prf_path)
+                    if ok:
+                        ok2, msg2 = import_prf_file(prf_path)
+                        if ok2:
+                            self._log("  ✅ Konten importiert via PRF – Outlook fragt nach Passwort")
+                            self.results["success"].append("Konten automatisch eingerichtet (nur Passwort eingeben)")
+                            prf_done = True
+                        else:
+                            self._log(f"  ⚠️  PRF-Import fehlgeschlagen: {msg2}")
+                    else:
+                        self._log(f"  ⚠️  PRF-Generierung: {msg}")
+                except Exception as e:
+                    self._log(f"  ⚠️  PRF-Fehler: {e}")
+
+            # Methode 2: Fallback Registry-Import
+            if not prf_done:
+                reg_file = os.path.join(backup_dir, "Konten_Profile.reg")
+                if os.path.exists(reg_file):
+                    ok, msg = import_outlook_profiles(backup_dir)
+                    if ok:
+                        self._log("  ✅ Konten-Registry importiert – Passwort beim Start eingeben")
+                        self.results["success"].append("Konten-Profile importiert (Passwort beim Start eingeben)")
+                    else:
+                        self._log(f"  ⚠️  Registry-Import fehlgeschlagen: {msg}")
+                        self.results["warning"].append(f"Konten-Import: {msg}")
 
         # PST in Outlook importieren – nur bei klassischem Outlook, nicht bei App-Version
 
