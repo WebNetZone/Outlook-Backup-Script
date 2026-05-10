@@ -2089,7 +2089,7 @@ class MigrationApp:
                     continue
 
                 dst = os.path.join(pst_dst_dir, pst_name)
-                self._log(f"  → {pst_name} ({method})")
+                self._log(f"  → {pst_name}")
                 self._set_cur(f"Kopiere: {pst_name}")
 
                 # Verbindungsüberwachung während Kopieren
