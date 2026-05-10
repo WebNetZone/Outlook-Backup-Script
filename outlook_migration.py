@@ -685,6 +685,7 @@ class MigrationApp:
         self.all_pst_files = []
         self.active_psts = []
         self.pst_vars = {}
+        self.pst_group_vars = {}
         self.cancel_event = threading.Event()
         self.start_time = None
         self.results = {"success": [], "warning": [], "error": []}
@@ -925,60 +926,98 @@ class MigrationApp:
                   font=("Segoe UI", 11), bg=BG_PANEL, fg=TEXT_GRAY).pack(pady=20)
             return
 
+        # Group PSTs by source location
+        groups = {}
         for path in self.all_pst_files:
-            is_active = path in self.active_psts
-            in_od = is_in_onedrive(path)
-            is_net = is_network_path(path)
-            is_valid = is_pst_valid(path)
+            key = self._pst_subfolder(path)
+            groups.setdefault(key, []).append(path)
 
-            if path not in self.pst_vars:
-                self.pst_vars[path] = BooleanVar(value=is_valid and not in_od)
+        for group_name, paths in groups.items():
+            # Pre-compute per-path state and init pst_vars
+            checkable_paths = []
+            for path in paths:
+                in_od = is_in_onedrive(path)
+                is_valid = is_pst_valid(path)
+                if path not in self.pst_vars:
+                    self.pst_vars[path] = BooleanVar(value=is_valid and not in_od)
+                if not in_od and is_valid:
+                    checkable_paths.append(path)
 
-            row = Frame(self.pst_inner, bg=BG_CARD2, pady=4)
-            row.pack(fill=X, padx=5, pady=3)
+            # Init group var (all checkable files checked → group checked)
+            if group_name not in self.pst_group_vars:
+                all_on = bool(checkable_paths) and all(self.pst_vars[p].get() for p in checkable_paths)
+                self.pst_group_vars[group_name] = BooleanVar(value=all_on)
 
-            if in_od:
-                sc, st, can = ACCENT_RED, "⚠️ OneDrive", False
-            elif is_net:
-                sc, st, can = ACCENT_WARN, "🌐 Netzwerk", True
-            elif not is_valid:
-                sc, st, can = ACCENT_RED, "❌ Beschädigt", False
-            elif is_active:
-                sc, st, can = ACCENT_GREEN, "✅ Aktiv", True
-            else:
-                sc, st, can = ACCENT_WARN, "⚠️ Inaktiv", True
+            # Group header row
+            hdr = Frame(self.pst_inner, bg=BG_DARK, pady=4)
+            hdr.pack(fill=X, padx=5, pady=(10, 1))
+            Checkbutton(hdr, variable=self.pst_group_vars[group_name], bg=BG_DARK,
+                        activebackground=BG_DARK, selectcolor=BG_PANEL,
+                        state=NORMAL if checkable_paths else DISABLED,
+                        command=lambda gn=group_name, cp=checkable_paths: self._toggle_pst_group(gn, cp)
+                        ).pack(side=LEFT, padx=(5, 0))
+            count_txt = f"{len(paths)} Datei{'en' if len(paths) != 1 else ''}"
+            Label(hdr, text=f"📁  {group_name}   ({count_txt})",
+                  font=("Segoe UI", 10, "bold"), bg=BG_DARK, fg=ACCENT_CYAN).pack(side=LEFT, padx=6)
 
-            Checkbutton(row, variable=self.pst_vars[path], bg=BG_CARD2,
-                        activebackground=BG_CARD2, selectcolor=BG_PANEL,
-                        state=NORMAL if can else DISABLED).pack(side=LEFT, padx=8)
+            # Individual file rows (indented)
+            for path in paths:
+                is_active = path in self.active_psts
+                in_od = is_in_onedrive(path)
+                is_net = is_network_path(path)
+                is_valid = is_pst_valid(path)
 
-            inf = Frame(row, bg=BG_CARD2)
-            inf.pack(side=LEFT, fill=X, expand=True)
-            Label(inf, text=os.path.basename(path),
-                  font=("Segoe UI", 10, "bold"), bg=BG_CARD2, fg=TEXT_WHITE).pack(anchor=W)
-            Label(inf, text=path, font=("Segoe UI", 8),
-                  bg=BG_CARD2, fg=TEXT_GRAY).pack(anchor=W)
+                if in_od:
+                    sc, st, can = ACCENT_RED, "⚠️ OneDrive", False
+                elif is_net:
+                    sc, st, can = ACCENT_WARN, "🌐 Netzwerk", True
+                elif not is_valid:
+                    sc, st, can = ACCENT_RED, "❌ Beschädigt", False
+                elif is_active:
+                    sc, st, can = ACCENT_GREEN, "✅ Aktiv", True
+                else:
+                    sc, st, can = ACCENT_WARN, "⚠️ Inaktiv", True
 
-            rr = Frame(row, bg=BG_CARD2)
-            rr.pack(side=RIGHT, padx=10)
-            try:
-                sz = format_size(os.path.getsize(path))
-            except Exception:
-                sz = "?"
-            Label(rr, text=sz, font=("Segoe UI", 9), bg=BG_CARD2, fg=TEXT_GRAY).pack()
-            Label(rr, text=st, font=("Segoe UI", 9, "bold"), bg=BG_CARD2, fg=sc).pack()
+                row = Frame(self.pst_inner, bg=BG_CARD2, pady=4)
+                row.pack(fill=X, padx=(30, 5), pady=2)
 
-            if in_od:
-                Button(row, text="Lösung", font=("Segoe UI", 8), bg=ACCENT_WARN, fg="white",
-                       relief=FLAT, command=lambda p=path: self._fix_onedrive(p)).pack(side=RIGHT, padx=5)
-            if is_net:
-                Button(row, text="Verbinden", font=("Segoe UI", 8), bg=ACCENT_BLUE, fg="white",
-                       relief=FLAT, command=lambda p=path: self._connect_net(p)).pack(side=RIGHT, padx=5)
+                Checkbutton(row, variable=self.pst_vars[path], bg=BG_CARD2,
+                            activebackground=BG_CARD2, selectcolor=BG_PANEL,
+                            state=NORMAL if can else DISABLED).pack(side=LEFT, padx=8)
+
+                inf = Frame(row, bg=BG_CARD2)
+                inf.pack(side=LEFT, fill=X, expand=True)
+                Label(inf, text=os.path.basename(path),
+                      font=("Segoe UI", 10, "bold"), bg=BG_CARD2, fg=TEXT_WHITE).pack(anchor=W)
+                Label(inf, text=path, font=("Segoe UI", 8),
+                      bg=BG_CARD2, fg=TEXT_GRAY).pack(anchor=W)
+
+                rr = Frame(row, bg=BG_CARD2)
+                rr.pack(side=RIGHT, padx=10)
+                try:
+                    sz = format_size(os.path.getsize(path))
+                except Exception:
+                    sz = "?"
+                Label(rr, text=sz, font=("Segoe UI", 9), bg=BG_CARD2, fg=TEXT_GRAY).pack()
+                Label(rr, text=st, font=("Segoe UI", 9, "bold"), bg=BG_CARD2, fg=sc).pack()
+
+                if in_od:
+                    Button(row, text="Lösung", font=("Segoe UI", 8), bg=ACCENT_WARN, fg="white",
+                           relief=FLAT, command=lambda p=path: self._fix_onedrive(p)).pack(side=RIGHT, padx=5)
+                if is_net:
+                    Button(row, text="Verbinden", font=("Segoe UI", 8), bg=ACCENT_BLUE, fg="white",
+                           relief=FLAT, command=lambda p=path: self._connect_net(p)).pack(side=RIGHT, padx=5)
 
         active_count = sum(1 for p in self.active_psts if p in self.all_pst_files)
         self.lbl_pst_info.config(
             text=f"{len(self.all_pst_files)} PST(s) gefunden | {active_count} aktiv in Outlook"
         )
+
+    def _toggle_pst_group(self, group_name, checkable_paths):
+        new_val = self.pst_group_vars[group_name].get()
+        for path in checkable_paths:
+            if path in self.pst_vars:
+                self.pst_vars[path].set(new_val)
 
     # ── TAB 4: AUSFÜHREN ──────────────────────────────────────
 
