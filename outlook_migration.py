@@ -1677,13 +1677,13 @@ class MigrationApp:
                 dst = os.path.join(pst_dest, pst_name)
                 self._log(f"  → {pst_name}")
                 try:
-                    ok, msg = copy_with_progress(pst_path, dst,
-                                                  progress_cb=self._file_progress,
-                                                  cancel_event=self.cancel_event)
+                    ok = copy_with_progress(pst_path, dst,
+                                            progress_cb=self._file_progress,
+                                            cancel_event=self.cancel_event)
                     if ok:
                         self.results["success"].append(f"PST kopiert: {pst_name}")
                     else:
-                        self.results["error"].append(f"PST Fehler: {pst_name}: {msg}")
+                        self.results["error"].append(f"PST abgebrochen: {pst_name}")
                 except Exception as e:
                     self.results["error"].append(f"PST Fehler: {pst_name}: {e}")
 
