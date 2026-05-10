@@ -2122,20 +2122,9 @@ class MigrationApp:
                         else:
                             retry = False
                     except Exception as e:
-                        # Verbindung unterbrochen?
-                        if net_ok and "Netzwerk" in method:
-                            self._log(f"  ⚠️  Verbindung unterbrochen. Warte auf alten PC...")
-                            # Warten bis wieder erreichbar
-                            while not self.cancel_event.is_set():
-                                time.sleep(5)
-                                if is_host_reachable(net_host):
-                                    self._log("  ✅ Verbindung wiederhergestellt!")
-                                    break
-                                self._log("  ⏳ Warte...")
-                        else:
-                            self._log(f"  ❌ Fehler: {e}")
-                            self.results["error"].append(f"PST Fehler: {pst_name}")
-                            retry = False
+                        self._log(f"  ❌ Fehler: {e}")
+                        self.results["error"].append(f"PST Fehler: {pst_name}")
+                        retry = False
 
         # Signaturen wiederherstellen
         sig_backup = os.path.join(backup_dir, "Signaturen")
@@ -2172,11 +2161,13 @@ class MigrationApp:
             else:
                 self.results["error"].append(f"Regeln: {msg}")
 
-        # PST in Outlook importieren
-        if not self.cancel_event.is_set():
+        # PST in Outlook importieren – nur bei klassischem Outlook, nicht bei App-Version
+        is_new_outlook = "App-Version" in (self.outlook_version_name or "")
+        if not is_new_outlook and not self.cancel_event.is_set():
             self._log("\n📧 Importiere PST in Outlook...")
             self._set_cur("PST in Outlook importieren...")
-            pst_dst_dir = os.path.join(user, "Documents", "Outlook Files")
+            pst_dst_dir = self.pst_dest.get().strip() or os.path.join(
+                user, "AppData", "Local", "Microsoft", "Outlook")
             if os.path.exists(pst_dst_dir):
                 for pst_file in os.listdir(pst_dst_dir):
                     if pst_file.lower().endswith(".pst"):
@@ -2192,8 +2183,56 @@ class MigrationApp:
         if net_ok and share_path and not self.cancel_event.is_set():
             self.root.after(0, self._ask_close_share)
 
+        # Hinweis für neue Outlook-App: Konten müssen manuell eingerichtet werden
+        if is_new_outlook and not self.cancel_event.is_set():
+            konten_file = os.path.join(backup_dir, "Konten_Info.txt")
+            konten_info = ""
+            if os.path.exists(konten_file):
+                try:
+                    with open(konten_file, "r", encoding="utf-8") as f:
+                        konten_info = f.read()
+                except Exception:
+                    pass
+            self.root.after(0, lambda ki=konten_info: self._show_new_outlook_hint(ki))
+
         clear_progress()
         self.root.after(0, self._backup_done)
+
+    def _show_new_outlook_hint(self, konten_info):
+        """Hinweis nach Restore: Neue Outlook-App benötigt manuelle Kontoeinrichtung."""
+        win = Toplevel(self.root)
+        win.title("Konten einrichten – Neue Outlook-App")
+        win.configure(bg=BG_DARK)
+        win.resizable(False, False)
+        win.grab_set()
+
+        Label(win, text="⚠️  Konten manuell einrichten",
+              font=("Segoe UI", 13, "bold"), bg=BG_DARK, fg=ACCENT_WARN).pack(pady=(18, 6), padx=24)
+
+        msg = (
+            "Du verwendest die neue Outlook-App (Windows 11).\n\n"
+            "Die neue Outlook-App speichert Konten anders als Outlook 2016 –\n"
+            "sie können nicht automatisch übertragen werden.\n\n"
+            "Bitte richte deine E-Mail-Konten manuell ein:\n"
+            "  Outlook öffnen → Konto hinzufügen → E-Mail & Passwort eingeben"
+        )
+        Label(win, text=msg, font=("Segoe UI", 10), bg=BG_DARK, fg=TEXT_WHITE,
+              justify=LEFT).pack(padx=24, pady=(0, 10))
+
+        if konten_info:
+            Label(win, text="Gesicherte Konten vom alten PC:",
+                  font=("Segoe UI", 10, "bold"), bg=BG_DARK, fg=ACCENT_CYAN).pack(anchor=W, padx=24)
+            txt = ScrolledText(win, height=10, width=64, bg=BG_PANEL, fg=TEXT_WHITE,
+                               font=("Consolas", 9), relief=FLAT)
+            txt.pack(padx=24, pady=6)
+            txt.insert("end", konten_info)
+            txt.config(state=DISABLED)
+
+        self._btn(win, "OK – Verstanden", win.destroy, color=ACCENT_GREEN, width=20).pack(pady=(6, 18))
+        win.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - win.winfo_width()) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - win.winfo_height()) // 2
+        win.geometry(f"+{x}+{y}")
 
     def _ask_retry(self, filename, reason):
         """Abfrage: Wiederholen / Überspringen / Abbrechen."""
