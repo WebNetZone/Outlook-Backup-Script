@@ -1202,6 +1202,66 @@ class MigrationApp:
         self._btn(bf, "📦 Outlook Backup starten",
                   lambda: self._set_mode("old_pc"), color=ACCENT_BLUE, width=22).pack(side=LEFT)
 
+        bf2 = Frame(self.detect_info, bg=BG_CARD)
+        bf2.pack(anchor=W, pady=(8, 0))
+        self._btn(bf2, "📂 USB-Stick manuell auswählen",
+                  self._manual_usb_select, color=ACCENT_WARN, width=28).pack(side=LEFT)
+
+    def _manual_usb_select(self):
+        """USB-Stick oder Backup-Ordner manuell auswählen und nach Konfig suchen."""
+        path = filedialog.askdirectory(title="USB-Stick / Backup-Ordner auswählen")
+        if not path:
+            return
+
+        self.lbl_detect_status.config(text="🔍 Suche Konfig-Datei...", fg=ACCENT_CYAN)
+
+        # Config in ausgewähltem Ordner + Unterordner suchen (max 3 Ebenen)
+        found_config_path = None
+        try:
+            for root, dirs, files in os.walk(path):
+                depth = root[len(path):].count(os.sep)
+                if depth >= 3:
+                    dirs[:] = []
+                    continue
+                if CONFIG_FILE in files:
+                    found_config_path = os.path.join(root, CONFIG_FILE)
+                    break
+        except Exception:
+            pass
+
+        if found_config_path:
+            try:
+                with open(found_config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                # Laufwerksbuchstaben anpassen
+                backup_dir = config.get("backup_dir", "")
+                if backup_dir and len(backup_dir) >= 2 and backup_dir[1] == ":":
+                    usb_drive = os.path.splitdrive(path)[0]
+                    config["backup_dir"] = usb_drive + backup_dir[2:]
+                self.usb_config = config
+                self.config_path = found_config_path
+                self._found_config(config, path)
+                return
+            except Exception as e:
+                messagebox.showerror("Fehler", f"Konfig-Datei konnte nicht gelesen werden:\n{e}")
+                return
+
+        # Keine Konfig gefunden – trotzdem als USB-Stammordner setzen
+        self.lbl_detect_status.config(
+            text="⚠️ Keine Konfig gefunden – Ordner als Backup-Ziel gesetzt.", fg=ACCENT_WARN)
+        self.usb_root.set(path)
+        for w in self.detect_info.winfo_children():
+            w.destroy()
+        Label(self.detect_info,
+              text=f"Ausgewählter Ordner: {path}",
+              font=("Segoe UI", 9), bg=BG_CARD, fg=TEXT_GRAY).pack(anchor=W, pady=(0, 8))
+        bf = Frame(self.detect_info, bg=BG_CARD)
+        bf.pack(anchor=W)
+        self._btn(bf, "📦 Outlook Backup starten",
+                  lambda: self._set_mode("old_pc"), color=ACCENT_BLUE, width=22).pack(side=LEFT, padx=(0, 10))
+        self._btn(bf, "📂 Anderen Ordner wählen",
+                  self._manual_usb_select, color=ACCENT_WARN, width=22).pack(side=LEFT)
+
     def _hardware_already_scanned(self, hw_path, usb):
         """Hardware bereits gescannt – direkt Alter PC Modus + Option erneut scannen."""
         self.lbl_detect_status.config(text="✅ Hardware bereits gescannt!", fg=ACCENT_GREEN)
