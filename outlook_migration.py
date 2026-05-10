@@ -289,6 +289,7 @@ def find_config_on_usb():
 # ═══════════════════════════════════════════════════════════════
 
 def detect_outlook_version():
+    # 1. HKCU (Outlook konfiguriert)
     for ver in OUTLOOK_VERSIONS:
         try:
             key_path = rf"Software\Microsoft\Office\{ver}\Outlook"
@@ -296,6 +297,42 @@ def detect_outlook_version():
                 return ver, OUTLOOK_VERSIONS[ver]
         except Exception:
             pass
+
+    # 2. HKLM InstallRoot (installiert, aber noch kein Profil)
+    for ver in OUTLOOK_VERSIONS:
+        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_LOCAL_MACHINE):
+            for wow in (0, winreg.KEY_WOW64_32KEY):
+                try:
+                    key_path = rf"SOFTWARE\Microsoft\Office\{ver}\Outlook\InstallRoot"
+                    with winreg.OpenKey(hive, key_path, 0, winreg.KEY_READ | wow):
+                        return ver, OUTLOOK_VERSIONS[ver]
+                except Exception:
+                    pass
+
+    # 3. Click-to-Run (Microsoft 365)
+    try:
+        key_path = r"SOFTWARE\Microsoft\Office\ClickToRun\Configuration"
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as k:
+            products, _ = winreg.QueryValueEx(k, "ProductReleaseIds")
+            if "Outlook" in products or "O365" in products or "Microsoft365" in products:
+                return "16.0", OUTLOOK_VERSIONS["16.0"]
+    except Exception:
+        pass
+
+    # 4. OUTLOOK.EXE auf Disk suchen
+    exe_paths = [
+        r"C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE",
+        r"C:\Program Files (x86)\Microsoft Office\root\Office16\OUTLOOK.EXE",
+        r"C:\Program Files\Microsoft Office\Office16\OUTLOOK.EXE",
+        r"C:\Program Files (x86)\Microsoft Office\Office16\OUTLOOK.EXE",
+        r"C:\Program Files\Microsoft Office\root\Office15\OUTLOOK.EXE",
+        r"C:\Program Files (x86)\Microsoft Office\Office15\OUTLOOK.EXE",
+    ]
+    for path in exe_paths:
+        if os.path.exists(path):
+            ver = "16.0" if "Office16" in path else "15.0"
+            return ver, OUTLOOK_VERSIONS.get(ver, "Outlook")
+
     return None, None
 
 def close_outlook():
@@ -1405,7 +1442,8 @@ class MigrationApp:
         if ver:
             self.lbl_outlook.config(text=f"✅  {ver_name} (v{ver})", fg=ACCENT_GREEN)
         else:
-            self.lbl_outlook.config(text="❌  Outlook nicht gefunden!", fg=ACCENT_RED)
+            self.lbl_outlook.config(
+                text="⚠️  Outlook nicht erkannt (noch kein Profil?)", fg=ACCENT_WARN)
 
         # Benutzer
         users = get_windows_users()
@@ -1451,11 +1489,16 @@ class MigrationApp:
                 return
 
         # Outlook prüfen
-        ver, _ = detect_outlook_version()
+        ver, ver_name = detect_outlook_version()
         if not ver:
             messagebox.showerror("Outlook fehlt",
-                "Outlook ist nicht installiert!\n\nBitte zuerst Outlook installieren.")
+                "Outlook wurde nicht gefunden!\n\n"
+                "Bitte stelle sicher dass Outlook installiert ist.\n"
+                "Hinweis: Outlook muss nicht zwingend eingerichtet sein –\n"
+                "das Backup-Tool richtet es mit ein.")
             return
+        self.outlook_version = ver
+        self.outlook_version_name = ver_name or "Unbekannt"
 
         # Speicherplatz prüfen
         backup_dir = os.path.join(os.environ.get("USERPROFILE", ""), "Documents", "OutlookRestore")
