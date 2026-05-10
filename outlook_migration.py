@@ -23,6 +23,8 @@ import uuid
 import struct
 import hashlib
 import platform
+import logging
+import traceback
 from tkinter import *
 from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
@@ -34,6 +36,47 @@ from tkinter.scrolledtext import ScrolledText
 APP_TITLE   = "Outlook Migration Tool"
 APP_VERSION = "3.0.0"
 CONFIG_FILE = "outlook_migration_config.json"
+
+# ═══════════════════════════════════════════════════════════════
+# LOGGING
+# ═══════════════════════════════════════════════════════════════
+
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "error.log")
+
+def _setup_logging():
+    logger = logging.getLogger("OutlookMigration")
+    logger.setLevel(logging.DEBUG)
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s",
+                            datefmt="%d.%m.%Y %H:%M:%S")
+    # Datei-Handler (error.log)
+    try:
+        fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
+        fh.setLevel(logging.WARNING)
+        fh.setFormatter(fmt)
+        logger.addHandler(fh)
+    except Exception:
+        pass
+    # Terminal-Handler (stderr)
+    sh = logging.StreamHandler(sys.stderr)
+    sh.setLevel(logging.WARNING)
+    sh.setFormatter(fmt)
+    logger.addHandler(sh)
+    return logger
+
+log = _setup_logging()
+
+def log_error(msg, exc=None):
+    """Fehler in error.log + Terminal ausgeben."""
+    if exc:
+        log.error(f"{msg}\n{traceback.format_exc()}")
+        print(f"[FEHLER] {msg}: {exc}", file=sys.stderr)
+    else:
+        log.error(msg)
+        print(f"[FEHLER] {msg}", file=sys.stderr)
+
+def log_warning(msg):
+    log.warning(msg)
+    print(f"[WARNUNG] {msg}", file=sys.stderr)
 PROGRESS_FILE = os.path.join(os.environ.get("TEMP", "C:\\Temp"), "outlook_migration_progress.json")
 SHARE_NAME  = "OutlookMigration"
 MIN_PYTHON  = (3, 10)
@@ -2048,6 +2091,15 @@ class MigrationApp:
         threading.Thread(target=self._old_pc_thread, args=(sel_psts,), daemon=True).start()
 
     def _old_pc_thread(self, sel_psts):
+        try:
+            self._old_pc_thread_inner(sel_psts)
+        except Exception as e:
+            log_error("Fehler im Backup-Thread", e)
+            self._log(f"❌ Kritischer Fehler: {e}")
+            self.results["error"].append(f"Kritischer Fehler: {e}")
+            self.root.after(0, self._backup_done)
+
+    def _old_pc_thread_inner(self, sel_psts):
         user = self.user_profile.get()
         usb = self.usb_root.get()
         date_str = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -2264,6 +2316,15 @@ class MigrationApp:
         threading.Thread(target=self._new_pc_thread, daemon=True).start()
 
     def _new_pc_thread(self):
+        try:
+            self._new_pc_thread_inner()
+        except Exception as e:
+            log_error("Fehler im Restore-Thread", e)
+            self._log(f"❌ Kritischer Fehler: {e}")
+            self.results["error"].append(f"Kritischer Fehler: {e}")
+            self.root.after(0, self._backup_done)
+
+    def _new_pc_thread_inner(self):
         config = self.usb_config
         usb = self.usb_root.get()
         user = os.environ.get("USERPROFILE", "")
@@ -2800,5 +2861,16 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        log_error("Unbehandelter Fehler im Hauptprogramm", e)
+        try:
+            import tkinter.messagebox as mb
+            mb.showerror("Kritischer Fehler",
+                f"Ein unerwarteter Fehler ist aufgetreten:\n{e}\n\n"
+                f"Details in: {LOG_FILE}")
+        except Exception:
+            pass
+        sys.exit(1)
 
