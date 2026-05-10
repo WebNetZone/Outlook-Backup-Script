@@ -319,7 +319,7 @@ def detect_outlook_version():
     except Exception:
         pass
 
-    # 4. OUTLOOK.EXE auf Disk suchen
+    # 4. OUTLOOK.EXE auf Disk suchen (klassisches Outlook)
     exe_paths = [
         r"C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE",
         r"C:\Program Files (x86)\Microsoft Office\root\Office16\OUTLOOK.EXE",
@@ -332,6 +332,35 @@ def detect_outlook_version():
         if os.path.exists(path):
             ver = "16.0" if "Office16" in path else "15.0"
             return ver, OUTLOOK_VERSIONS.get(ver, "Outlook")
+
+    # 5. Neues Outlook (Store/App-Version, olk.exe)
+    local = os.environ.get("LOCALAPPDATA", "")
+    olk_data = os.path.join(local, "Microsoft", "Olk")
+    if os.path.isdir(olk_data):
+        return "16.0", "Neues Outlook (App-Version)"
+
+    # Auch im WindowsApps-Verzeichnis suchen
+    for prog in (r"C:\Program Files\WindowsApps", os.path.join(local, "Microsoft", "WindowsApps")):
+        try:
+            if os.path.isdir(prog):
+                for entry in os.listdir(prog):
+                    if entry.lower().startswith("microsoft.outlookforwindows"):
+                        return "16.0", "Neues Outlook (App-Version)"
+        except Exception:
+            pass
+
+    # AppX-Paket per PowerShell prüfen
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-AppxPackage -Name Microsoft.OutlookForWindows 2>$null | Select-Object -ExpandProperty Version"],
+            capture_output=True, text=True, timeout=8
+        )
+        ver_str = result.stdout.strip()
+        if ver_str:
+            return "16.0", f"Neues Outlook (App {ver_str})"
+    except Exception:
+        pass
 
     return None, None
 
