@@ -690,6 +690,7 @@ class MigrationApp:
         self.results = {"success": [], "warning": [], "error": []}
         self.share_path = None
         self.pst_dest = StringVar(value="")
+        self.opt_pst_manual = BooleanVar(value=False)
 
         self._build_ui()
         self.root.after(500, self._auto_detect)
@@ -854,7 +855,12 @@ class MigrationApp:
         self._btn(pst_row, "📂 Wählen", self._choose_pst_dest, width=10).pack(side=LEFT)
         self._btn(pst_row, "✖ Leer", lambda: self.pst_dest.set(""), width=6).pack(side=LEFT, padx=(4, 0))
         Label(pst_card, text="Leer lassen = PST-Dateien werden nicht extra kopiert",
-              font=("Segoe UI", 8), bg=BG_CARD, fg=TEXT_GRAY).pack(anchor=W, pady=(3, 0))
+              font=("Segoe UI", 8), bg=BG_CARD, fg=TEXT_GRAY).pack(anchor=W, pady=(3, 4))
+        Checkbutton(pst_card,
+                    text="📋  Manuell kopieren (Script legt nur Ordnerstruktur + Pfade-Liste an)",
+                    variable=self.opt_pst_manual,
+                    bg=BG_CARD, fg=TEXT_WHITE, selectcolor=BG_PANEL,
+                    activebackground=BG_CARD, font=("Segoe UI", 10)).pack(anchor=W)
 
         # Optionen
         opt_card = self._card(self.sf, "⚙️ Optionen")
@@ -1417,6 +1423,24 @@ class MigrationApp:
         if path:
             self.pst_dest.set(path)
 
+    def _pst_subfolder(self, pst_path):
+        """Unterordnername basierend auf Herkunftspfad bestimmen."""
+        folder = os.path.dirname(pst_path).lower()
+        if "appdata\\local\\microsoft\\outlook" in folder:
+            return "Aktiv_Outlook"
+        elif "appdata\\roaming\\microsoft\\outlook" in folder:
+            return "Aktiv_Outlook_Roaming"
+        elif "documents" in folder or "dokumente" in folder:
+            return "Dokumente"
+        elif "desktop" in folder or "schreibtisch" in folder:
+            return "Desktop"
+        else:
+            # Laufwerksbuchstabe + erster Unterordner
+            parts = pst_path.replace("/", "\\").split("\\")
+            drive = parts[0].replace(":", "") if parts else "X"
+            top = parts[1] if len(parts) > 1 else "Sonstige"
+            return f"Sonstige_{drive}_{top}"
+
     def _goto_pst(self):
         if not self.usb_root.get():
             messagebox.showwarning("USB-Stick", "Bitte zuerst USB-Stick / Zielordner auswählen!")
@@ -1664,28 +1688,53 @@ class MigrationApp:
                     "Kontodaten: Nicht auslesbar (bei Outlook 365 normal – Account auf neuem PC einfach neu anmelden)"
                 )
 
-        # ── PST-Dateien in Zielordner kopieren
+        # ── PST-Dateien verarbeiten
         pst_dest = self.pst_dest.get().strip()
+        pst_manual = self.opt_pst_manual.get()
+
         if sel_psts and pst_dest and not self.cancel_event.is_set():
-            self._log(f"\n📁 Kopiere PST-Dateien nach: {pst_dest}")
-            self._set_cur("Kopiere PST-Dateien...")
-            os.makedirs(pst_dest, exist_ok=True)
-            for pst_path in sel_psts:
-                if self.cancel_event.is_set():
-                    break
-                pst_name = os.path.basename(pst_path)
-                dst = os.path.join(pst_dest, pst_name)
-                self._log(f"  → {pst_name}")
-                try:
-                    ok = copy_with_progress(pst_path, dst,
-                                            progress_cb=self._file_progress,
-                                            cancel_event=self.cancel_event)
-                    if ok:
-                        self.results["success"].append(f"PST kopiert: {pst_name}")
-                    else:
-                        self.results["error"].append(f"PST abgebrochen: {pst_name}")
-                except Exception as e:
-                    self.results["error"].append(f"PST Fehler: {pst_name}: {e}")
+            pst_root = os.path.join(pst_dest, "PST")
+            os.makedirs(pst_root, exist_ok=True)
+
+            if pst_manual:
+                # Manuell-Modus: nur Ordnerstruktur + Pfade-Liste anlegen
+                self._log(f"\n📋 Manuell-Modus: Lege Ordnerstruktur an...")
+                self._set_cur("Lege PST-Ordnerstruktur an...")
+                liste_path = os.path.join(pst_root, "PST_Pfade.txt")
+                with open(liste_path, "w", encoding="utf-8") as f:
+                    f.write("PST-Dateien Liste\n")
+                    f.write("=" * 60 + "\n\n")
+                    for pst_path in sel_psts:
+                        subfolder = self._pst_subfolder(pst_path)
+                        ziel = os.path.join(pst_root, subfolder)
+                        os.makedirs(ziel, exist_ok=True)
+                        f.write(f"Quelle:  {pst_path}\n")
+                        f.write(f"Ziel:    {os.path.join(ziel, os.path.basename(pst_path))}\n\n")
+                self._log(f"  ✅ Ordnerstruktur erstellt. Pfade in: PST_Pfade.txt")
+                self.results["success"].append(f"PST Ordnerstruktur angelegt ({len(sel_psts)} Einträge)")
+            else:
+                # Auto-Modus: PST-Dateien nach Herkunftsordner sortiert kopieren
+                self._log(f"\n📁 Kopiere PST-Dateien nach: {pst_root}")
+                self._set_cur("Kopiere PST-Dateien...")
+                for pst_path in sel_psts:
+                    if self.cancel_event.is_set():
+                        break
+                    pst_name = os.path.basename(pst_path)
+                    subfolder = self._pst_subfolder(pst_path)
+                    ziel_dir = os.path.join(pst_root, subfolder)
+                    os.makedirs(ziel_dir, exist_ok=True)
+                    dst = os.path.join(ziel_dir, pst_name)
+                    self._log(f"  → [{subfolder}] {pst_name}")
+                    try:
+                        ok = copy_with_progress(pst_path, dst,
+                                                progress_cb=self._file_progress,
+                                                cancel_event=self.cancel_event)
+                        if ok:
+                            self.results["success"].append(f"PST kopiert: {subfolder}\\{pst_name}")
+                        else:
+                            self.results["error"].append(f"PST abgebrochen: {pst_name}")
+                    except Exception as e:
+                        self.results["error"].append(f"PST Fehler: {pst_name}: {e}")
 
         # ── Netzwerkfreigabe erstellen (nur wenn kein Zielordner gewählt)
         if sel_psts and not pst_dest and not self.cancel_event.is_set():
