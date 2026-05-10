@@ -2210,11 +2210,16 @@ class MigrationApp:
               font=("Segoe UI", 13, "bold"), bg=BG_DARK, fg=ACCENT_WARN).pack(pady=(18, 6), padx=24)
 
         msg = (
-            "Du verwendest die neue Outlook-App (Windows 11).\n\n"
-            "Die neue Outlook-App speichert Konten anders als Outlook 2016 –\n"
-            "sie können nicht automatisch übertragen werden.\n\n"
-            "Bitte richte deine E-Mail-Konten manuell ein:\n"
-            "  Outlook öffnen → Konto hinzufügen → E-Mail & Passwort eingeben"
+            "Du verwendest die neue Outlook-App (Windows 11).\n"
+            "Bitte in dieser Reihenfolge vorgehen:\n\n"
+            "  1.  Outlook öffnen → Konto hinzufügen\n"
+            "       → E-Mail-Adresse & Passwort eingeben\n"
+            "       (alle Konten vom alten PC einrichten)\n\n"
+            "  2.  PST-Dateien importieren (falls vorhanden)\n"
+            "       Outlook → Datei → Öffnen → PST-Datei importieren\n\n"
+            "  3.  Signaturen & Einstellungen wurden bereits\n"
+            "       wiederhergestellt und sind aktiv sobald\n"
+            "       das Konto eingerichtet ist."
         )
         Label(win, text=msg, font=("Segoe UI", 10), bg=BG_DARK, fg=TEXT_WHITE,
               justify=LEFT).pack(padx=24, pady=(0, 10))
