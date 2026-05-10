@@ -1000,8 +1000,18 @@ class MigrationApp:
         for w in self.pst_inner.winfo_children():
             w.destroy()
         if not self.all_pst_files:
-            Label(self.pst_inner, text="Keine PST-Dateien gefunden.",
-                  font=("Segoe UI", 11), bg=BG_PANEL, fg=TEXT_GRAY).pack(pady=20)
+            box = Frame(self.pst_inner, bg=BG_PANEL)
+            box.pack(pady=30, padx=20, anchor=W)
+            Label(box, text="Keine PST-Dateien gefunden.",
+                  font=("Segoe UI", 11, "bold"), bg=BG_PANEL, fg=TEXT_GRAY).pack(anchor=W, pady=(0, 6))
+            Label(box, text="Wo befinden sich die PST-Dateien?",
+                  font=("Segoe UI", 10), bg=BG_PANEL, fg=TEXT_WHITE).pack(anchor=W, pady=(0, 12))
+            bf = Frame(box, bg=BG_PANEL)
+            bf.pack(anchor=W)
+            self._btn(bf, "📂 Ordner durchsuchen",
+                      self._browse_folder_for_pst, color=ACCENT_BLUE, width=22).pack(side=LEFT, padx=(0, 8))
+            self._btn(bf, "📄 PST-Datei(en) direkt wählen",
+                      self._add_pst_manual, color=ACCENT_GREEN, width=26).pack(side=LEFT)
             return
 
         # Group PSTs by source location
@@ -1680,6 +1690,30 @@ class MigrationApp:
             if p not in self.all_pst_files:
                 self.all_pst_files.append(p)
         self._render_pst()
+
+    def _browse_folder_for_pst(self):
+        folder = filedialog.askdirectory(title="Ordner mit PST-Dateien auswählen")
+        if not folder:
+            return
+        self.lbl_pst_info.config(text=f"🔍 Durchsuche {folder} ...")
+        for w in self.pst_inner.winfo_children():
+            w.destroy()
+
+        def scan():
+            found = []
+            try:
+                for root, dirs, files in os.walk(folder):
+                    for f in files:
+                        if f.lower().endswith(".pst"):
+                            full = os.path.join(root, f)
+                            if full not in self.all_pst_files:
+                                found.append(full)
+            except Exception:
+                pass
+            self.all_pst_files.extend(found)
+            self.root.after(0, self._render_pst)
+
+        threading.Thread(target=scan, daemon=True).start()
 
     def _fix_onedrive(self, path):
         if messagebox.askyesno("OneDrive PST",
