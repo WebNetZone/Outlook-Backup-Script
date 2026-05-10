@@ -41,7 +41,7 @@ MIN_RAM_GB  = 4
 MIN_CPU_MHZ = 1500
 
 OUTLOOK_VERSIONS = {
-    "16.0": "Outlook 2016 / 2019 / 2021 / 365",
+    "16.0": "Outlook 2016 / 2019 / 2021 / 2024 / 365",
     "15.0": "Outlook 2013",
     "14.0": "Outlook 2010",
 }
