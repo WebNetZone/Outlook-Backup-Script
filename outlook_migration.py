@@ -549,6 +549,35 @@ def remove_network_share(share_name=SHARE_NAME):
     except Exception:
         return False
 
+def export_outlook_profiles(outlook_version, backup_dir):
+    """Outlook-Profile (Kontoeinstellungen) als .reg exportieren."""
+    try:
+        reg_file = os.path.join(backup_dir, "Konten_Profile.reg")
+        key_path = f"HKCU\\Software\\Microsoft\\Office\\{outlook_version}\\Outlook\\Profiles"
+        result = subprocess.run(
+            ["reg", "export", key_path, reg_file, "/y"],
+            capture_output=True, creationflags=0x08000000
+        )
+        return result.returncode == 0, reg_file
+    except Exception as e:
+        return False, str(e)
+
+def import_outlook_profiles(backup_dir):
+    """Outlook-Profile aus .reg-Datei importieren."""
+    try:
+        reg_file = os.path.join(backup_dir, "Konten_Profile.reg")
+        if not os.path.exists(reg_file):
+            return False, "Keine Konten_Profile.reg gefunden"
+        result = subprocess.run(
+            ["reg", "import", reg_file],
+            capture_output=True, creationflags=0x08000000
+        )
+        if result.returncode == 0:
+            return True, reg_file
+        return False, result.stderr.decode(errors="ignore")
+    except Exception as e:
+        return False, str(e)
+
 def is_host_reachable(host, timeout=3):
     """Prüft ob ein Host im Netzwerk erreichbar ist."""
     try:
@@ -1916,21 +1945,35 @@ class MigrationApp:
         if self.opt_accounts.get() and not self.cancel_event.is_set():
             self._log("\n📧 Lese Kontodaten...")
             self._set_cur("Lese Kontodaten...")
-            accounts = get_outlook_account_info(self.outlook_version)
-            acc_file = os.path.join(backup_dir, "Konten_Info.txt")
             os.makedirs(backup_dir, exist_ok=True)
+            accounts = get_outlook_account_info(self.outlook_version)
             if accounts:
+                # Lesbare Text-Datei
+                acc_file = os.path.join(backup_dir, "Konten_Info.txt")
                 with open(acc_file, "w", encoding="utf-8") as f:
                     f.write("Outlook Kontodaten\n" + "="*50 + "\n\n")
                     for acc in accounts:
                         for k, v in acc.items():
                             f.write(f"{k}: {v}\n")
                         f.write("\n")
+                # JSON für strukturierten Import
+                import json as _json
+                json_file = os.path.join(backup_dir, "Konten_Info.json")
+                with open(json_file, "w", encoding="utf-8") as f:
+                    _json.dump(accounts, f, ensure_ascii=False, indent=2)
                 self.results["success"].append(f"Kontodaten ({len(accounts)} Konto/Konten)")
             else:
                 self.results["warning"].append(
                     "Kontodaten: Nicht auslesbar (bei Outlook 365 normal – Account auf neuem PC einfach neu anmelden)"
                 )
+            # Outlook-Profile-Registry exportieren (für automatischen Import auf neuem PC)
+            if self.outlook_version:
+                ok, reg_file = export_outlook_profiles(self.outlook_version, backup_dir)
+                if ok:
+                    self._log(f"  ✅ Profile-Registry exportiert: Konten_Profile.reg")
+                    self.results["success"].append("Konten-Profile (Registry) exportiert")
+                else:
+                    self._log(f"  ⚠️  Profile-Registry nicht exportierbar (Outlook 365/App normal)")
 
         # ── PST-Dateien verarbeiten
         pst_dest = self.pst_dest.get().strip()
@@ -2164,8 +2207,23 @@ class MigrationApp:
             else:
                 self.results["error"].append(f"Regeln: {msg}")
 
-        # PST in Outlook importieren – nur bei klassischem Outlook, nicht bei App-Version
+        # Konten-Profile importieren (nur klassisches Outlook, nicht App-Version)
         is_new_outlook = "App-Version" in (self.outlook_version_name or "")
+        if not is_new_outlook and not self.cancel_event.is_set():
+            reg_file = os.path.join(backup_dir, "Konten_Profile.reg")
+            if os.path.exists(reg_file):
+                self._log("\n📧 Importiere Outlook-Konten (Registry)...")
+                self._set_cur("Importiere Konten...")
+                ok, msg = import_outlook_profiles(backup_dir)
+                if ok:
+                    self._log("  ✅ Konten importiert – Outlook fragt beim Start nach dem Passwort")
+                    self.results["success"].append("Konten-Profile importiert (Passwort beim Start eingeben)")
+                else:
+                    self._log(f"  ⚠️  Konten-Import fehlgeschlagen: {msg}")
+                    self.results["warning"].append(f"Konten-Import: {msg}")
+
+        # PST in Outlook importieren – nur bei klassischem Outlook, nicht bei App-Version
+
         if not is_new_outlook and not self.cancel_event.is_set():
             self._log("\n📧 Importiere PST in Outlook...")
             self._set_cur("PST in Outlook importieren...")
