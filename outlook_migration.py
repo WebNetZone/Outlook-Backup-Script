@@ -253,10 +253,22 @@ def find_usb_sticks():
     return usb_drives
 
 def find_config_on_usb():
-    """Konfig-Datei auf USB-Sticks suchen. Laufwerksbuchstabe wird automatisch angepasst."""
+    """Konfig-Datei auf USB-Sticks suchen (Root + Unterordner bis 3 Ebenen). Laufwerksbuchstabe wird automatisch angepasst."""
     for usb in find_usb_sticks():
-        config_path = os.path.join(usb, CONFIG_FILE)
-        if os.path.exists(config_path):
+        # Kandidaten sammeln: Root zuerst, dann Unterordner (max 3 Ebenen)
+        candidates = []
+        try:
+            for root, dirs, files in os.walk(usb):
+                depth = root[len(usb):].count(os.sep)
+                if depth >= 3:
+                    dirs[:] = []
+                    continue
+                if CONFIG_FILE in files:
+                    candidates.append(os.path.join(root, CONFIG_FILE))
+        except Exception:
+            pass
+
+        for config_path in candidates:
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
                     config = json.load(f)
