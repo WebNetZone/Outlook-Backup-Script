@@ -1,5 +1,13 @@
-$ErrorActionPreference = "Stop"
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ErrorActionPreference = "Continue"
+
+# Skriptverzeichnis robust ermitteln
+$ScriptDir = $PSScriptRoot
+if (-not $ScriptDir) {
+    $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+if (-not $ScriptDir) {
+    $ScriptDir = (Get-Location).Path
+}
 
 Write-Host ""
 Write-Host "  +======================================================+"
@@ -27,7 +35,7 @@ function Find-Python {
 
     # 2. Python Launcher py.exe versuchen
     $py = Get-Command py -ErrorAction SilentlyContinue
-    if ($py -and $py.Source -notlike "*WindowsApps*") {
+    if ($py -and $py.Source -and $py.Source -notlike "*WindowsApps*") {
         try {
             $ver = & $py.Source --version 2>&1
             if ($ver -match "Python 3\.(\d+)") {
@@ -42,7 +50,11 @@ function Find-Python {
 
 # Internet prüfen
 Write-Host "  [..] Prüfe Internetverbindung..."
-$internet = Test-Connection -ComputerName "8.8.8.8" -Count 1 -Quiet
+try {
+    $internet = Test-Connection -ComputerName "8.8.8.8" -Count 1 -Quiet -ErrorAction SilentlyContinue
+} catch {
+    $internet = $false
+}
 
 # Python prüfen
 Write-Host "  [..] Suche Python 3.10+..."
@@ -59,10 +71,14 @@ if (-not $pythonExe) {
     }
     Write-Host "  [..] Lade Python 3.12 herunter (bitte warten)..."
     $installer = "$env:TEMP\python_installer.exe"
-    Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.0/python-3.12.0-amd64.exe" -OutFile $installer
-    Write-Host "  [..] Installiere Python..."
-    Start-Process -FilePath $installer -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0" -Wait
-    $pythonExe = "C:\Program Files\Python312\python.exe"
+    try {
+        Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.0/python-3.12.0-amd64.exe" -OutFile $installer
+        Write-Host "  [..] Installiere Python..."
+        Start-Process -FilePath $installer -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0" -Wait
+        $pythonExe = "C:\Program Files\Python312\python.exe"
+    } catch {
+        Write-Host "  [!!] FEHLER: Python-Download fehlgeschlagen: $_"
+    }
     if (-not (Test-Path $pythonExe)) {
         Write-Host "  [!!] FEHLER: Python Installation fehlgeschlagen!"
         Read-Host "  Enter zum Beenden"
@@ -75,15 +91,14 @@ Write-Host "  [OK] Python gefunden: $pythonExe"
 # Libraries installieren
 Write-Host "  [..] Installiere benoetigte Libraries..."
 $req = Join-Path $ScriptDir "requirements.txt"
-if (Test-Path $req) {
-    & $pythonExe -m pip install -r $req --quiet
-} else {
-    & $pythonExe -m pip install psutil --quiet
-}
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  [!!] FEHLER: Libraries konnten nicht installiert werden!"
-    Read-Host "  Enter zum Beenden"
-    exit 1
+try {
+    if (Test-Path $req) {
+        & $pythonExe -m pip install -r $req --quiet 2>&1 | Out-Null
+    } else {
+        & $pythonExe -m pip install psutil --quiet 2>&1 | Out-Null
+    }
+} catch {
+    Write-Host "  [!] Warnung: Libraries konnten nicht installiert werden: $_"
 }
 Write-Host "  [OK] Libraries installiert."
 

@@ -349,12 +349,15 @@ def detect_outlook_version():
         except Exception:
             pass
 
-    # AppX-Paket per PowerShell prüfen
+    # AppX-Paket per PowerShell prüfen (kein Fenster, kein sichtbarer Fehler)
     try:
+        CREATE_NO_WINDOW = 0x08000000
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-AppxPackage -Name Microsoft.OutlookForWindows 2>$null | Select-Object -ExpandProperty Version"],
-            capture_output=True, text=True, timeout=8
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "$pkg = Get-AppxPackage -Name Microsoft.OutlookForWindows -ErrorAction SilentlyContinue;"
+             "if ($pkg) { $pkg.Version }"],
+            capture_output=True, text=True, timeout=8,
+            creationflags=CREATE_NO_WINDOW
         )
         ver_str = result.stdout.strip()
         if ver_str:
